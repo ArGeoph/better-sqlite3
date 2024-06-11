@@ -13,23 +13,10 @@
 #include <unordered_map>
 #include <algorithm>
 #include <sqlite3.h>
-#include "fts5/debug.h"
-#include "fts5/uthash.h"
-#include "fts5/utarray.h"
-#include "fts5/fts5.h"
-#include "fts5/meta.h"
-#include "fts5/snowball.h"
-#include "fts5/stopwords.h"
-#include "fts5/synonyms.h"
-#include "fts5/phrases.h"
-#include "fts5/unicode2.h"
-#include "fts5/unicode.h"
 #include <node.h>
 #include <node_object_wrap.h>
 #include <node_buffer.h>
-#line 31 "./src/util/macros.lzz"
-template <class T> using CopyablePersistent = v8::Global<T>;
-#line 144 "./src/util/macros.lzz"
+#line 141 "./src/util/macros.lzz"
 void SetPrototypeGetter(
 	v8::Isolate* isolate,
 	v8::Local<v8::External> data,
@@ -48,29 +35,29 @@ v8::Local <v8::String> InternalizedFromUtf8 (v8::Isolate * isolate, char const *
 v8::Local <v8::Value> InternalizedFromUtf8OrNull (v8::Isolate * isolate, char const * data, int length);
 #line 26 "./src/util/macros.lzz"
 v8::Local <v8::String> InternalizedFromLatin1 (v8::Isolate * isolate, char const * str);
-#line 33 "./src/util/macros.lzz"
-void SetFrozen (v8::Isolate * isolate, v8::Local <v8::Context> ctx, v8::Local <v8::Object> obj, CopyablePersistent <v8::String> & key, v8::Local <v8::Value> value);
-#line 37 "./src/util/macros.lzz"
+#line 30 "./src/util/macros.lzz"
+void SetFrozen (v8::Isolate * isolate, v8::Local <v8::Context> ctx, v8::Local <v8::Object> obj, v8::Global <v8::String> & key, v8::Local <v8::Value> value);
+#line 34 "./src/util/macros.lzz"
 void ThrowError (char const * message);
-#line 38 "./src/util/macros.lzz"
+#line 35 "./src/util/macros.lzz"
 void ThrowTypeError (char const * message);
-#line 39 "./src/util/macros.lzz"
+#line 36 "./src/util/macros.lzz"
 void ThrowRangeError (char const * message);
-#line 91 "./src/util/macros.lzz"
+#line 88 "./src/util/macros.lzz"
 bool IS_SKIPPED (char c);
-#line 96 "./src/util/macros.lzz"
+#line 93 "./src/util/macros.lzz"
 template <typename T>
-#line 96 "./src/util/macros.lzz"
+#line 93 "./src/util/macros.lzz"
 T * ALLOC_ARRAY (size_t count);
-#line 101 "./src/util/macros.lzz"
+#line 98 "./src/util/macros.lzz"
 template <typename T>
-#line 101 "./src/util/macros.lzz"
+#line 98 "./src/util/macros.lzz"
 void FREE_ARRAY (T * array_pointer);
-#line 105 "./src/util/macros.lzz"
+#line 102 "./src/util/macros.lzz"
 v8::Local <v8::FunctionTemplate> NewConstructorTemplate (v8::Isolate * isolate, v8::Local <v8::External> data, v8::FunctionCallback func, char const * name);
-#line 116 "./src/util/macros.lzz"
+#line 113 "./src/util/macros.lzz"
 void SetPrototypeMethod (v8::Isolate * isolate, v8::Local <v8::External> data, v8::Local <v8::FunctionTemplate> recv, char const * name, v8::FunctionCallback func);
-#line 129 "./src/util/macros.lzz"
+#line 126 "./src/util/macros.lzz"
 void SetPrototypeSymbolMethod (v8::Isolate * isolate, v8::Local <v8::External> data, v8::Local <v8::FunctionTemplate> recv, v8::Local <v8::Symbol> symbol, v8::FunctionCallback func);
 #line 1 "./src/util/constants.lzz"
 class CS
@@ -82,49 +69,49 @@ public:
 #line 10 "./src/util/constants.lzz"
   explicit CS (v8::Isolate * isolate);
 #line 119 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> database;
+  v8::Global <v8::String> database;
 #line 120 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> reader;
+  v8::Global <v8::String> reader;
 #line 121 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> source;
+  v8::Global <v8::String> source;
 #line 122 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> memory;
+  v8::Global <v8::String> memory;
 #line 123 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> readonly;
+  v8::Global <v8::String> readonly;
 #line 124 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> name;
+  v8::Global <v8::String> name;
 #line 125 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> next;
+  v8::Global <v8::String> next;
 #line 126 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> length;
+  v8::Global <v8::String> length;
 #line 127 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> done;
+  v8::Global <v8::String> done;
 #line 128 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> value;
+  v8::Global <v8::String> value;
 #line 129 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> changes;
+  v8::Global <v8::String> changes;
 #line 130 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> lastInsertRowid;
+  v8::Global <v8::String> lastInsertRowid;
 #line 131 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> statement;
+  v8::Global <v8::String> statement;
 #line 132 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> column;
+  v8::Global <v8::String> column;
 #line 133 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> table;
+  v8::Global <v8::String> table;
 #line 134 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> type;
+  v8::Global <v8::String> type;
 #line 135 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> totalPages;
+  v8::Global <v8::String> totalPages;
 #line 136 "./src/util/constants.lzz"
-  CopyablePersistent <v8::String> remainingPages;
+  v8::Global <v8::String> remainingPages;
 #line 138 "./src/util/constants.lzz"
 private:
 #line 140 "./src/util/constants.lzz"
-  static void SetString (v8::Isolate * isolate, CopyablePersistent <v8::String> & constant, char const * str);
+  static void SetString (v8::Isolate * isolate, v8::Global <v8::String> & constant, char const * str);
 #line 144 "./src/util/constants.lzz"
   void SetCode (v8::Isolate * isolate, int code, char const * str);
 #line 150 "./src/util/constants.lzz"
-  std::unordered_map <int, CopyablePersistent<v8::String> > codes;
+  std::unordered_map <int, v8::Global<v8::String> > codes;
 };
 #line 1 "./src/util/bind-map.lzz"
 class BindMap
@@ -149,7 +136,7 @@ public:
 #line 22 "./src/util/bind-map.lzz"
     explicit Pair (v8::Isolate * isolate, Pair * pair);
 #line 25 "./src/util/bind-map.lzz"
-    CopyablePersistent <v8::String> const name;
+    v8::Global <v8::String> const name;
 #line 26 "./src/util/bind-map.lzz"
     int const index;
   };
@@ -174,11 +161,11 @@ private:
 #line 72 "./src/util/bind-map.lzz"
   int length;
 };
-#line 31 "./src/better_sqlite3.lzz"
+#line 20 "./src/better_sqlite3.lzz"
 struct Addon;
-#line 32 "./src/better_sqlite3.lzz"
+#line 21 "./src/better_sqlite3.lzz"
 class Statement;
-#line 33 "./src/better_sqlite3.lzz"
+#line 22 "./src/better_sqlite3.lzz"
 class Backup;
 #line 1 "./src/objects/database.lzz"
 class Database : public node::ObjectWrap
@@ -263,63 +250,63 @@ private:
   explicit Database (v8::Isolate * isolate, Addon * addon, sqlite3 * db_handle, v8::Local <v8::Value> logger);
 #line 149 "./src/objects/database.lzz"
   static void JS_new (v8::FunctionCallbackInfo <v8 :: Value> const & info);
-#line 237 "./src/objects/database.lzz"
+#line 201 "./src/objects/database.lzz"
   static void JS_prepare (v8::FunctionCallbackInfo <v8 :: Value> const & info);
-#line 253 "./src/objects/database.lzz"
+#line 217 "./src/objects/database.lzz"
   static void JS_exec (v8::FunctionCallbackInfo <v8 :: Value> const & info);
-#line 293 "./src/objects/database.lzz"
+#line 257 "./src/objects/database.lzz"
   static void JS_backup (v8::FunctionCallbackInfo <v8 :: Value> const & info);
-#line 311 "./src/objects/database.lzz"
+#line 275 "./src/objects/database.lzz"
   static void JS_serialize (v8::FunctionCallbackInfo <v8 :: Value> const & info);
-#line 333 "./src/objects/database.lzz"
+#line 297 "./src/objects/database.lzz"
   static void JS_function (v8::FunctionCallbackInfo <v8 :: Value> const & info);
-#line 357 "./src/objects/database.lzz"
+#line 321 "./src/objects/database.lzz"
   static void JS_aggregate (v8::FunctionCallbackInfo <v8 :: Value> const & info);
-#line 386 "./src/objects/database.lzz"
+#line 350 "./src/objects/database.lzz"
   static void JS_table (v8::FunctionCallbackInfo <v8 :: Value> const & info);
-#line 406 "./src/objects/database.lzz"
+#line 370 "./src/objects/database.lzz"
   static void JS_loadExtension (v8::FunctionCallbackInfo <v8 :: Value> const & info);
-#line 428 "./src/objects/database.lzz"
+#line 392 "./src/objects/database.lzz"
   static void JS_close (v8::FunctionCallbackInfo <v8 :: Value> const & info);
-#line 438 "./src/objects/database.lzz"
+#line 402 "./src/objects/database.lzz"
   static void JS_defaultSafeIntegers (v8::FunctionCallbackInfo <v8 :: Value> const & info);
-#line 444 "./src/objects/database.lzz"
+#line 408 "./src/objects/database.lzz"
   static void JS_unsafeMode (v8::FunctionCallbackInfo <v8 :: Value> const & info);
-#line 451 "./src/objects/database.lzz"
+#line 415 "./src/objects/database.lzz"
   static void JS_open (v8::Local <v8 :: String> _, v8::PropertyCallbackInfo <v8 :: Value> const & info);
-#line 455 "./src/objects/database.lzz"
+#line 419 "./src/objects/database.lzz"
   static void JS_inTransaction (v8::Local <v8 :: String> _, v8::PropertyCallbackInfo <v8 :: Value> const & info);
-#line 460 "./src/objects/database.lzz"
+#line 424 "./src/objects/database.lzz"
   static bool Deserialize (v8::Local <v8::Object> buffer, Addon * addon, sqlite3 * db_handle, bool readonly);
-#line 485 "./src/objects/database.lzz"
+#line 449 "./src/objects/database.lzz"
   static void FreeSerialization (char * data, void * _);
-#line 489 "./src/objects/database.lzz"
+#line 453 "./src/objects/database.lzz"
   static int const MAX_BUFFER_SIZE = node::Buffer::kMaxLength > INT_MAX ? INT_MAX : static_cast<int>(node::Buffer::kMaxLength);
-#line 490 "./src/objects/database.lzz"
+#line 454 "./src/objects/database.lzz"
   static int const MAX_STRING_SIZE = v8::String::kMaxLength > INT_MAX ? INT_MAX : static_cast<int>(v8::String::kMaxLength);
-#line 492 "./src/objects/database.lzz"
+#line 456 "./src/objects/database.lzz"
   sqlite3 * const db_handle;
-#line 493 "./src/objects/database.lzz"
+#line 457 "./src/objects/database.lzz"
   bool open;
-#line 494 "./src/objects/database.lzz"
+#line 458 "./src/objects/database.lzz"
   bool busy;
-#line 495 "./src/objects/database.lzz"
+#line 459 "./src/objects/database.lzz"
   bool safe_ints;
-#line 496 "./src/objects/database.lzz"
+#line 460 "./src/objects/database.lzz"
   bool unsafe_mode;
-#line 497 "./src/objects/database.lzz"
+#line 461 "./src/objects/database.lzz"
   bool was_js_error;
-#line 498 "./src/objects/database.lzz"
+#line 462 "./src/objects/database.lzz"
   bool const has_logger;
-#line 499 "./src/objects/database.lzz"
+#line 463 "./src/objects/database.lzz"
   unsigned short int iterators;
-#line 500 "./src/objects/database.lzz"
+#line 464 "./src/objects/database.lzz"
   Addon * const addon;
-#line 501 "./src/objects/database.lzz"
-  CopyablePersistent <v8::Value> const logger;
-#line 502 "./src/objects/database.lzz"
+#line 465 "./src/objects/database.lzz"
+  v8::Global <v8::Value> const logger;
+#line 466 "./src/objects/database.lzz"
   std::set <Statement*, CompareStatement> stmts;
-#line 503 "./src/objects/database.lzz"
+#line 467 "./src/objects/database.lzz"
   std::set <Backup*, CompareBackup> backups;
 };
 #line 1 "./src/objects/statement.lzz"
@@ -530,7 +517,7 @@ protected:
 #line 56 "./src/util/custom-function.lzz"
   v8::Isolate * const isolate;
 #line 57 "./src/util/custom-function.lzz"
-  CopyablePersistent <v8::Function> const fn;
+  v8::Global <v8::Function> const fn;
 #line 58 "./src/util/custom-function.lzz"
   bool const safe_ints;
 };
@@ -552,7 +539,7 @@ public:
 #line 37 "./src/util/custom-aggregate.lzz"
 private:
 #line 39 "./src/util/custom-aggregate.lzz"
-  static void xStepBase (sqlite3_context * invocation, int argc, sqlite3_value * * argv, CopyablePersistent <v8::Function> const CustomAggregate::* ptrtm);
+  static void xStepBase (sqlite3_context * invocation, int argc, sqlite3_value * * argv, v8::Global <v8::Function> const CustomAggregate::* ptrtm);
 #line 58 "./src/util/custom-aggregate.lzz"
   static void xValueBase (sqlite3_context * invocation, bool is_final);
 #line 82 "./src/util/custom-aggregate.lzz"
@@ -561,7 +548,7 @@ private:
 #line 82 "./src/util/custom-aggregate.lzz"
   public:
 #line 83 "./src/util/custom-aggregate.lzz"
-    CopyablePersistent <v8::Value> value;
+    v8::Global <v8::Value> value;
 #line 84 "./src/util/custom-aggregate.lzz"
     bool initialized;
 #line 85 "./src/util/custom-aggregate.lzz"
@@ -578,11 +565,11 @@ private:
 #line 117 "./src/util/custom-aggregate.lzz"
   bool const invoke_start;
 #line 118 "./src/util/custom-aggregate.lzz"
-  CopyablePersistent <v8::Function> const inverse;
+  v8::Global <v8::Function> const inverse;
 #line 119 "./src/util/custom-aggregate.lzz"
-  CopyablePersistent <v8::Function> const result;
+  v8::Global <v8::Function> const result;
 #line 120 "./src/util/custom-aggregate.lzz"
-  CopyablePersistent <v8::Value> const start;
+  v8::Global <v8::Value> const start;
 };
 #line 1 "./src/util/custom-table.lzz"
 class CustomTable
@@ -619,7 +606,7 @@ private:
 #line 103 "./src/util/custom-table.lzz"
     bool const safe_ints;
 #line 104 "./src/util/custom-table.lzz"
-    CopyablePersistent <v8::Function> const generator;
+    v8::Global <v8::Function> const generator;
 #line 105 "./src/util/custom-table.lzz"
     std::vector <std::string> const parameter_names;
   };
@@ -637,11 +624,11 @@ private:
 #line 122 "./src/util/custom-table.lzz"
     sqlite3_vtab_cursor base;
 #line 123 "./src/util/custom-table.lzz"
-    CopyablePersistent <v8::Object> iterator;
+    v8::Global <v8::Object> iterator;
 #line 124 "./src/util/custom-table.lzz"
-    CopyablePersistent <v8::Function> next;
+    v8::Global <v8::Function> next;
 #line 125 "./src/util/custom-table.lzz"
-    CopyablePersistent <v8::Array> row;
+    v8::Global <v8::Array> row;
 #line 126 "./src/util/custom-table.lzz"
     bool done;
 #line 127 "./src/util/custom-table.lzz"
@@ -696,7 +683,7 @@ private:
 #line 402 "./src/util/custom-table.lzz"
   std::string const name;
 #line 403 "./src/util/custom-table.lzz"
-  CopyablePersistent <v8::Function> const factory;
+  v8::Global <v8::Function> const factory;
 };
 #line 65 "./src/util/data.lzz"
 namespace Data
@@ -792,32 +779,32 @@ private:
 #line 203 "./src/util/binder.lzz"
   bool success;
 };
-#line 45 "./src/better_sqlite3.lzz"
+#line 34 "./src/better_sqlite3.lzz"
 struct Addon
 {
-#line 46 "./src/better_sqlite3.lzz"
+#line 35 "./src/better_sqlite3.lzz"
   static void JS_setErrorConstructor (v8::FunctionCallbackInfo <v8 :: Value> const & info);
-#line 51 "./src/better_sqlite3.lzz"
+#line 40 "./src/better_sqlite3.lzz"
   static void Cleanup (void * ptr);
-#line 58 "./src/better_sqlite3.lzz"
+#line 47 "./src/better_sqlite3.lzz"
   explicit Addon (v8::Isolate * isolate);
-#line 63 "./src/better_sqlite3.lzz"
+#line 52 "./src/better_sqlite3.lzz"
   sqlite3_uint64 NextId ();
-#line 67 "./src/better_sqlite3.lzz"
-  CopyablePersistent <v8::Function> Statement;
-#line 68 "./src/better_sqlite3.lzz"
-  CopyablePersistent <v8::Function> StatementIterator;
-#line 69 "./src/better_sqlite3.lzz"
-  CopyablePersistent <v8::Function> Backup;
-#line 70 "./src/better_sqlite3.lzz"
-  CopyablePersistent <v8::Function> SqliteError;
-#line 71 "./src/better_sqlite3.lzz"
+#line 56 "./src/better_sqlite3.lzz"
+  v8::Global <v8::Function> Statement;
+#line 57 "./src/better_sqlite3.lzz"
+  v8::Global <v8::Function> StatementIterator;
+#line 58 "./src/better_sqlite3.lzz"
+  v8::Global <v8::Function> Backup;
+#line 59 "./src/better_sqlite3.lzz"
+  v8::Global <v8::Function> SqliteError;
+#line 60 "./src/better_sqlite3.lzz"
   v8::FunctionCallbackInfo <v8 :: Value> const * privileged_info;
-#line 72 "./src/better_sqlite3.lzz"
+#line 61 "./src/better_sqlite3.lzz"
   sqlite3_uint64 next_id;
-#line 73 "./src/better_sqlite3.lzz"
+#line 62 "./src/better_sqlite3.lzz"
   CS cs;
-#line 74 "./src/better_sqlite3.lzz"
+#line 63 "./src/better_sqlite3.lzz"
   std::set <Database*, Database::CompareDatabase> dbs;
 };
 #line 16 "./src/util/macros.lzz"
@@ -845,31 +832,31 @@ LZZ_INLINE v8::Local <v8::String> InternalizedFromLatin1 (v8::Isolate * isolate,
                                                                                            {
         return v8::String::NewFromOneByte(isolate, reinterpret_cast<const uint8_t*>(str), v8::NewStringType::kInternalized).ToLocalChecked();
 }
-#line 33 "./src/util/macros.lzz"
-LZZ_INLINE void SetFrozen (v8::Isolate * isolate, v8::Local <v8::Context> ctx, v8::Local <v8::Object> obj, CopyablePersistent <v8::String> & key, v8::Local <v8::Value> value)
-#line 33 "./src/util/macros.lzz"
-                                                                                                                                                                    {
+#line 30 "./src/util/macros.lzz"
+LZZ_INLINE void SetFrozen (v8::Isolate * isolate, v8::Local <v8::Context> ctx, v8::Local <v8::Object> obj, v8::Global <v8::String> & key, v8::Local <v8::Value> value)
+#line 30 "./src/util/macros.lzz"
+                                                                                                                                                            {
         obj->DefineOwnProperty(ctx, key.Get(isolate), value, static_cast<v8::PropertyAttribute>(v8::DontDelete | v8::ReadOnly)).FromJust();
 }
-#line 91 "./src/util/macros.lzz"
+#line 88 "./src/util/macros.lzz"
 LZZ_INLINE bool IS_SKIPPED (char c)
-#line 91 "./src/util/macros.lzz"
+#line 88 "./src/util/macros.lzz"
                                {
         return c == ' ' || c == ';' || (c >= '\t' && c <= '\r');
 }
-#line 96 "./src/util/macros.lzz"
+#line 93 "./src/util/macros.lzz"
 template <typename T>
-#line 96 "./src/util/macros.lzz"
+#line 93 "./src/util/macros.lzz"
 LZZ_INLINE T * ALLOC_ARRAY (size_t count)
-#line 96 "./src/util/macros.lzz"
+#line 93 "./src/util/macros.lzz"
                                                       {
         return static_cast<T*>(::operator new[](count * sizeof(T)));
 }
-#line 101 "./src/util/macros.lzz"
+#line 98 "./src/util/macros.lzz"
 template <typename T>
-#line 101 "./src/util/macros.lzz"
+#line 98 "./src/util/macros.lzz"
 LZZ_INLINE void FREE_ARRAY (T * array_pointer)
-#line 101 "./src/util/macros.lzz"
+#line 98 "./src/util/macros.lzz"
                                                            {
         ::operator delete[](array_pointer);
 }
@@ -963,9 +950,9 @@ LZZ_INLINE bool Backup::Compare (Backup const * const a, Backup const * const b)
                 return a->id < b->id;
 }
 #line 39 "./src/util/custom-aggregate.lzz"
-LZZ_INLINE void CustomAggregate::xStepBase (sqlite3_context * invocation, int argc, sqlite3_value * * argv, CopyablePersistent <v8::Function> const CustomAggregate::* ptrtm)
+LZZ_INLINE void CustomAggregate::xStepBase (sqlite3_context * invocation, int argc, sqlite3_value * * argv, v8::Global <v8::Function> const CustomAggregate::* ptrtm)
 #line 39 "./src/util/custom-aggregate.lzz"
-                                                                                                                                                                  {
+                                                                                                                                                          {
                 CustomAggregate * self = static_cast < CustomAggregate * > ( sqlite3_user_data ( invocation ) ) ; v8 :: Isolate * isolate = self -> isolate ; v8 :: HandleScope scope ( isolate ) ; Accumulator * acc = self -> GetAccumulator ( invocation ) ; if ( acc -> value . IsEmpty ( ) ) return ;
 
                 v8::Local<v8::Value> args_fast[5];
@@ -1039,9 +1026,9 @@ LZZ_INLINE CustomTable::VTab * CustomTable::Cursor::GetVTab ()
                                                     {
                         return VTab::Upcast(base.pVtab);
 }
-#line 63 "./src/better_sqlite3.lzz"
+#line 52 "./src/better_sqlite3.lzz"
 LZZ_INLINE sqlite3_uint64 Addon::NextId ()
-#line 63 "./src/better_sqlite3.lzz"
+#line 52 "./src/better_sqlite3.lzz"
                                        {
                 return next_id++;
 }
