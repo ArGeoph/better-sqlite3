@@ -1,6 +1,6 @@
 /******************************************************************************
 ** This file is an amalgamation of many separate C source files from SQLite
-** version 3.47.2.  By combining all the individual C code files into this
+** version 3.48.0.  By combining all the individual C code files into this
 ** single large file, the entire code can be compiled as a single translation
 ** unit.  This allows many compilers to do optimizations that would not be
 ** possible if the files were compiled separately.  Performance improvements
@@ -18,14 +18,16 @@
 ** separate file. This file contains only code for the core SQLite library.
 **
 ** The content in this amalgamation comes from Fossil check-in
-** 2aabe05e2e8cae4847a802ee2daddc1d7413.
+** d2fe6b05f38d9d7cd78c5d252e99ac59f1ae with changes in files:
+**
+**    
 */
+#ifndef SQLITE_AMALGAMATION
 #define SQLITE_CORE 1
 #define SQLITE_AMALGAMATION 1
 #ifndef SQLITE_PRIVATE
 # define SQLITE_PRIVATE static
 #endif
-#define SQLITE_UDL_CAPABLE_PARSER 1
 /************** Begin file sqliteInt.h ***************************************/
 /*
 ** 2001 September 15
@@ -463,9 +465,9 @@ extern "C" {
 ** [sqlite3_libversion_number()], [sqlite3_sourceid()],
 ** [sqlite_version()] and [sqlite_source_id()].
 */
-#define SQLITE_VERSION        "3.47.2"
-#define SQLITE_VERSION_NUMBER 3047002
-#define SQLITE_SOURCE_ID      "2024-12-07 20:39:59 2aabe05e2e8cae4847a802ee2daddc1d7413d8fc560254d93ee3e72c14685b6c"
+#define SQLITE_VERSION        "3.48.0"
+#define SQLITE_VERSION_NUMBER 3048000
+#define SQLITE_SOURCE_ID      "2025-01-14 11:05:00 d2fe6b05f38d9d7cd78c5d252e99ac59f1aea071d669830c1ffe4e8966e84010"
 
 /*
 ** CAPI3REF: Run-Time Library Version Numbers
@@ -1417,6 +1419,11 @@ struct sqlite3_io_methods {
 ** pointed to by the pArg argument.  This capability is used during testing
 ** and only needs to be supported when SQLITE_TEST is defined.
 **
+** <li>[[SQLITE_FCNTL_NULL_IO]]
+** The [SQLITE_FCNTL_NULL_IO] opcode sets the low-level file descriptor
+** or file handle for the [sqlite3_file] object such that it will no longer
+** read or write to the database file.
+**
 ** <li>[[SQLITE_FCNTL_WAL_BLOCK]]
 ** The [SQLITE_FCNTL_WAL_BLOCK] is a signal to the VFS layer that it might
 ** be advantageous to block on the next WAL lock if the lock is not immediately
@@ -1570,6 +1577,7 @@ struct sqlite3_io_methods {
 #define SQLITE_FCNTL_EXTERNAL_READER        40
 #define SQLITE_FCNTL_CKSM_FILE              41
 #define SQLITE_FCNTL_RESET_CACHE            42
+#define SQLITE_FCNTL_NULL_IO                43
 
 /* deprecated names */
 #define SQLITE_GET_LOCKPROXYFILE      SQLITE_FCNTL_GET_LOCKPROXYFILE
@@ -2948,10 +2956,14 @@ SQLITE_API void sqlite3_set_last_insert_rowid(sqlite3*,sqlite3_int64);
 ** deleted by the most recently completed INSERT, UPDATE or DELETE
 ** statement on the database connection specified by the only parameter.
 ** The two functions are identical except for the type of the return value
-** and that if the number of rows modified by the most recent INSERT, UPDATE
+** and that if the number of rows modified by the most recent INSERT, UPDATE,
 ** or DELETE is greater than the maximum value supported by type "int", then
 ** the return value of sqlite3_changes() is undefined. ^Executing any other
 ** type of SQL statement does not modify the value returned by these functions.
+** For the purposes of this interface, a CREATE TABLE AS SELECT statement
+** does not count as an INSERT, UPDATE or DELETE statement and hence the rows
+** added to the new table by the CREATE TABLE AS SELECT statement are not
+** counted.
 **
 ** ^Only changes made directly by the INSERT, UPDATE or DELETE statement are
 ** considered - auxiliary changes caused by [CREATE TRIGGER | triggers],
@@ -4511,11 +4523,22 @@ SQLITE_API int sqlite3_limit(sqlite3*, int id, int newVal);
 ** <dd>The SQLITE_PREPARE_NO_VTAB flag causes the SQL compiler
 ** to return an error (error code SQLITE_ERROR) if the statement uses
 ** any virtual tables.
+**
+** [[SQLITE_PREPARE_DONT_LOG]] <dt>SQLITE_PREPARE_DONT_LOG</dt>
+** <dd>The SQLITE_PREPARE_DONT_LOG flag prevents SQL compiler
+** errors from being sent to the error log defined by
+** [SQLITE_CONFIG_LOG].  This can be used, for example, to do test
+** compiles to see if some SQL syntax is well-formed, without generating
+** messages on the global error log when it is not.  If the test compile
+** fails, the sqlite3_prepare_v3() call returns the same error indications
+** with or without this flag; it just omits the call to [sqlite3_log()] that
+** logs the error.
 ** </dl>
 */
 #define SQLITE_PREPARE_PERSISTENT              0x01
 #define SQLITE_PREPARE_NORMALIZE               0x02
 #define SQLITE_PREPARE_NO_VTAB                 0x04
+#define SQLITE_PREPARE_DONT_LOG                0x10
 
 /*
 ** CAPI3REF: Compiling An SQL Statement
@@ -11206,7 +11229,7 @@ SQLITE_API int sqlite3_deserialize(
 #if 0
 }  /* End of the 'extern "C"' block */
 #endif
-#endif /* SQLITE3_H */
+/* #endif for SQLITE3_H will be added by mksqlite3.tcl */
 
 /******** Begin file sqlite3rtree.h *********/
 /*
@@ -13457,13 +13480,28 @@ struct Fts5PhraseIter {
 **   value returned by xInstCount(), SQLITE_RANGE is returned.  Otherwise,
 **   output variable (*ppToken) is set to point to a buffer containing the
 **   matching document token, and (*pnToken) to the size of that buffer in
-**   bytes. This API is not available if the specified token matches a
-**   prefix query term. In that case both output variables are always set
-**   to 0.
+**   bytes.
 **
 **   The output text is not a copy of the document text that was tokenized.
 **   It is the output of the tokenizer module. For tokendata=1 tables, this
 **   includes any embedded 0x00 and trailing data.
+**
+**   This API may be slow in some cases if the token identified by parameters
+**   iIdx and iToken matched a prefix token in the query. In most cases, the
+**   first call to this API for each prefix token in the query is forced
+**   to scan the portion of the full-text index that matches the prefix
+**   token to collect the extra data required by this API. If the prefix
+**   token matches a large number of token instances in the document set,
+**   this may be a performance problem.
+**
+**   If the user knows in advance that a query may use this API for a
+**   prefix token, FTS5 may be configured to collect all required data as part
+**   of the initial querying of the full-text index, avoiding the second scan
+**   entirely. This also causes prefix queries that do not use this API to
+**   run more slowly and use more memory. FTS5 may be configured in this way
+**   either on a per-table basis using the [FTS5 insttoken | 'insttoken']
+**   option, or on a per-query basis using the
+**   [fts5_insttoken | fts5_insttoken()] user function.
 **
 **   This API can be quite slow if used with an FTS5 table created with the
 **   "detail=none" or "detail=column" option.
@@ -13898,6 +13936,7 @@ struct fts5_api {
 #endif /* _FTS5_H */
 
 /******** End of fts5.h *********/
+#endif /* SQLITE3_H */
 
 /************** End of sqlite3.h *********************************************/
 /************** Continuing where we left off in sqliteInt.h ******************/
@@ -13943,6 +13982,7 @@ struct fts5_api {
 #ifndef SQLITE_MAX_LENGTH
 # define SQLITE_MAX_LENGTH 1000000000
 #endif
+#define SQLITE_MIN_LENGTH 30   /* Minimum value for the length limit */
 
 /*
 ** This is the maximum number of
@@ -14008,9 +14048,13 @@ struct fts5_api {
 
 /*
 ** The maximum number of arguments to an SQL function.
+**
+** This value has a hard upper limit of 32767 due to storage
+** constraints (it needs to fit inside a i16).  We keep it
+** lower than that to prevent abuse.
 */
 #ifndef SQLITE_MAX_FUNCTION_ARG
-# define SQLITE_MAX_FUNCTION_ARG 127
+# define SQLITE_MAX_FUNCTION_ARG 1000
 #endif
 
 /*
@@ -16012,6 +16056,22 @@ typedef struct PgHdr DbPage;
 #define PAGER_JOURNALMODE_MEMORY      4   /* In-memory journal file */
 #define PAGER_JOURNALMODE_WAL         5   /* Use write-ahead logging */
 
+#define isWalMode(x) ((x)==PAGER_JOURNALMODE_WAL)
+
+/*
+** The argument to this macro is a file descriptor (type sqlite3_file*).
+** Return 0 if it is not open, or non-zero (but not 1) if it is.
+**
+** This is so that expressions can be written as:
+**
+**   if( isOpen(pPager->jfd) ){ ...
+**
+** instead of
+**
+**   if( pPager->jfd->pMethods ){ ...
+*/
+#define isOpen(pFd) ((pFd)->pMethods!=0)
+
 /*
 ** Flags that make up the mask passed to sqlite3PagerGet().
 */
@@ -17037,7 +17097,7 @@ typedef struct VdbeOpList VdbeOpList;
 ** Additional non-public SQLITE_PREPARE_* flags
 */
 #define SQLITE_PREPARE_SAVESQL  0x80  /* Preserve SQL text */
-#define SQLITE_PREPARE_MASK     0x0f  /* Mask of public flags */
+#define SQLITE_PREPARE_MASK     0x1f  /* Mask of public flags */
 
 /*
 ** Prototypes for the VDBE interface.  See comments on the implementation
@@ -17752,47 +17812,11 @@ struct FuncDefHash {
 };
 #define SQLITE_FUNC_HASH(C,L) (((C)+(L))%SQLITE_FUNC_HASH_SZ)
 
-#if defined(SQLITE_USER_AUTHENTICATION)
-# warning  "The SQLITE_USER_AUTHENTICATION extension is deprecated. \
- See ext/userauth/user-auth.txt for details."
-#endif
-#ifdef SQLITE_USER_AUTHENTICATION
-/*
-** Information held in the "sqlite3" database connection object and used
-** to manage user authentication.
-*/
-typedef struct sqlite3_userauth sqlite3_userauth;
-struct sqlite3_userauth {
-  u8 authLevel;                 /* Current authentication level */
-  int nAuthPW;                  /* Size of the zAuthPW in bytes */
-  char *zAuthPW;                /* Password used to authenticate */
-  char *zAuthUser;              /* User name used to authenticate */
-};
-
-/* Allowed values for sqlite3_userauth.authLevel */
-#define UAUTH_Unknown     0     /* Authentication not yet checked */
-#define UAUTH_Fail        1     /* User authentication failed */
-#define UAUTH_User        2     /* Authenticated as a normal user */
-#define UAUTH_Admin       3     /* Authenticated as an administrator */
-
-/* Functions used only by user authorization logic */
-SQLITE_PRIVATE int sqlite3UserAuthTable(const char*);
-SQLITE_PRIVATE int sqlite3UserAuthCheckLogin(sqlite3*,const char*,u8*);
-SQLITE_PRIVATE void sqlite3UserAuthInit(sqlite3*);
-SQLITE_PRIVATE void sqlite3CryptFunc(sqlite3_context*,int,sqlite3_value**);
-
-#endif /* SQLITE_USER_AUTHENTICATION */
-
 /*
 ** typedef for the authorization callback function.
 */
-#ifdef SQLITE_USER_AUTHENTICATION
-  typedef int (*sqlite3_xauth)(void*,int,const char*,const char*,const char*,
-                               const char*, const char*);
-#else
-  typedef int (*sqlite3_xauth)(void*,int,const char*,const char*,const char*,
-                               const char*);
-#endif
+typedef int (*sqlite3_xauth)(void*,int,const char*,const char*,const char*,
+                             const char*);
 
 #ifndef SQLITE_OMIT_DEPRECATED
 /* This is an extra SQLITE_TRACE macro that indicates "legacy" tracing
@@ -17953,9 +17977,6 @@ struct sqlite3 {
   void (*xUnlockNotify)(void **, int);  /* Unlock notify callback */
   sqlite3 *pNextBlocked;        /* Next in list of all blocked connections */
 #endif
-#ifdef SQLITE_USER_AUTHENTICATION
-  sqlite3_userauth auth;        /* User authentication information */
-#endif
 };
 
 /*
@@ -18114,7 +18135,7 @@ struct sqlite3 {
 ** field is used by per-connection app-def functions.
 */
 struct FuncDef {
-  i8 nArg;             /* Number of arguments.  -1 means unlimited */
+  i16 nArg;            /* Number of arguments.  -1 means unlimited */
   u32 funcFlags;       /* Some combination of SQLITE_FUNC_* */
   void *pUserData;     /* User data parameter */
   FuncDef *pNext;      /* Next function with same name */
@@ -22862,9 +22883,6 @@ static const char * const sqlite3azCompileOpt[] = {
 #ifdef SQLITE_UNTESTABLE
   "UNTESTABLE",
 #endif
-#ifdef SQLITE_USER_AUTHENTICATION
-  "USER_AUTHENTICATION",
-#endif
 #ifdef SQLITE_USE_ALLOCA
   "USE_ALLOCA",
 #endif
@@ -23712,7 +23730,7 @@ struct sqlite3_context {
   int isError;            /* Error code returned by the function. */
   u8 enc;                 /* Encoding to use for results */
   u8 skipFlag;            /* Skip accumulator loading if true */
-  u8 argc;                /* Number of arguments */
+  u16 argc;               /* Number of arguments */
   sqlite3_value *argv[1]; /* Argument set */
 };
 
@@ -23859,6 +23877,7 @@ struct PreUpdate {
   int iBlobWrite;                 /* Value returned by preupdate_blobwrite() */
   i64 iKey1;                      /* First key value passed to hook */
   i64 iKey2;                      /* Second key value passed to hook */
+  Mem oldipk;                     /* Memory cell holding "old" IPK value */
   Mem *aNew;                      /* Array of new.* values */
   Table *pTab;                    /* Schema object being updated */
   Index *pPk;                     /* PK index if pTab is WITHOUT ROWID */
@@ -33035,10 +33054,13 @@ SQLITE_PRIVATE void sqlite3TreeViewSrcList(TreeView *pView, const SrcList *pSrc)
       sqlite3_str_appendf(&x, " DDL");
     }
     if( pItem->fg.isCte ){
-      sqlite3_str_appendf(&x, " CteUse=0x%p", pItem->u2.pCteUse);
+      static const char *aMat[] = {",MAT", "", ",NO-MAT"};
+      sqlite3_str_appendf(&x, " CteUse=%d%s",
+                          pItem->u2.pCteUse->nUse,
+                          aMat[pItem->u2.pCteUse->eM10d]);
     }
     if( pItem->fg.isOn || (pItem->fg.isUsing==0 && pItem->u3.pOn!=0) ){
-      sqlite3_str_appendf(&x, " ON");
+      sqlite3_str_appendf(&x, " isOn");
     }
     if( pItem->fg.isTabFunc )      sqlite3_str_appendf(&x, " isTabFunc");
     if( pItem->fg.isCorrelated )   sqlite3_str_appendf(&x, " isCorrelated");
@@ -33066,9 +33088,6 @@ SQLITE_PRIVATE void sqlite3TreeViewSrcList(TreeView *pView, const SrcList *pSrc)
         sqlite3TreeViewColumnList(pView, pTab->aCol, pTab->nCol, 1);
       }
       assert( (int)pItem->fg.isNestedFrom == IsNestedFrom(pItem) );
-      sqlite3TreeViewPush(&pView, 0);
-      sqlite3TreeViewLine(pView, "SUBQUERY");
-      sqlite3TreeViewPop(&pView);
       sqlite3TreeViewSelect(pView, pItem->u4.pSubq->pSelect, 0);
     }
     if( pItem->fg.isTabFunc ){
@@ -34122,6 +34141,10 @@ SQLITE_PRIVATE void sqlite3TreeViewTrigger(
 ** accessible to the debugging, and to avoid warnings about unused
 ** functions.  But these routines only exist in debugging builds, so they
 ** do not contaminate the interface.
+**
+** See Also:
+**
+**     sqlite3ShowWhereTerm() in where.c
 */
 SQLITE_PRIVATE void sqlite3ShowExpr(const Expr *p){ sqlite3TreeViewExpr(0,p,0); }
 SQLITE_PRIVATE void sqlite3ShowExprList(const ExprList *p){ sqlite3TreeViewExprList(0,p,0,0);}
@@ -35813,8 +35836,14 @@ do_atof_calc:
 
   rr[0] = (double)s;
   assert( sizeof(s2)==sizeof(rr[0]) );
-  memcpy(&s2, &rr[0], sizeof(s2));
-  if( s2<=0x43efffffffffffffLL ){
+#ifdef SQLITE_DEBUG
+  rr[1] = 18446744073709549568.0;
+  memcpy(&s2, &rr[1], sizeof(s2));
+  assert( s2==0x43efffffffffffffLL );
+#endif
+  /* Largest double that can be safely converted to u64
+  **         vvvvvvvvvvvvvvvvvvvvvv   */
+  if( rr[0]<=18446744073709549568.0 ){
     s2 = (u64)rr[0];
     rr[1] = s>=s2 ? (double)(s - s2) : -(double)(s2 - s);
   }else{
@@ -38692,7 +38721,7 @@ SQLITE_PRIVATE int sqlite3KvvfsInit(void){
 # endif
 #else /* !SQLITE_WASI */
 # ifndef HAVE_FCHMOD
-#  define HAVE_FCHMOD
+#  define HAVE_FCHMOD 1
 # endif
 #endif /* SQLITE_WASI */
 
@@ -42466,6 +42495,11 @@ static int unixFileControl(sqlite3_file *id, int op, void *pArg){
     }
 #endif /* __linux__ && SQLITE_ENABLE_BATCH_ATOMIC_WRITE */
 
+    case SQLITE_FCNTL_NULL_IO: {
+      osClose(pFile->h);
+      pFile->h = -1;
+      return SQLITE_OK;
+    }
     case SQLITE_FCNTL_LOCKSTATE: {
       *(int*)pArg = pFile->eFileLock;
       return SQLITE_OK;
@@ -50347,6 +50381,11 @@ static int winFileControl(sqlite3_file *id, int op, void *pArg){
       return SQLITE_OK;
     }
 #endif
+    case SQLITE_FCNTL_NULL_IO: {
+      (void)osCloseHandle(pFile->h);
+      pFile->h = NULL;
+      return SQLITE_OK;
+    }
     case SQLITE_FCNTL_TEMPFILENAME: {
       char *zTFile = 0;
       int rc = winGetTempname(pFile->pVfs, &zTFile);
@@ -57997,20 +58036,6 @@ static const unsigned char aJournalMagic[] = {
 # define USEFETCH(x) 0
 #endif
 
-/*
-** The argument to this macro is a file descriptor (type sqlite3_file*).
-** Return 0 if it is not open, or non-zero (but not 1) if it is.
-**
-** This is so that expressions can be written as:
-**
-**   if( isOpen(pPager->jfd) ){ ...
-**
-** instead of
-**
-**   if( pPager->jfd->pMethods ){ ...
-*/
-#define isOpen(pFd) ((pFd)->pMethods!=0)
-
 #ifdef SQLITE_DIRECT_OVERFLOW_READ
 /*
 ** Return true if page pgno can be read directly from the database file
@@ -58025,11 +58050,6 @@ SQLITE_PRIVATE int sqlite3PagerDirectReadOk(Pager *pPager, Pgno pgno){
   assert( pPager!=0 );
   assert( pPager->fd!=0 );
   if( pPager->fd->pMethods==0 ) return 0;  /* Case (1) */
-  assert( pPager->fd->pMethods->xDeviceCharacteristics!=0 );
-  if( (pPager->fd->pMethods->xDeviceCharacteristics(pPager->fd)
-        & SQLITE_IOCAP_SUBPAGE_READ)==0 ){
-    return 0; /* Case (2) */
-  }
   if( sqlite3PCacheIsDirty(pPager->pPCache) ) return 0; /* Failed (3) */
 #ifndef SQLITE_OMIT_WAL
   if( pPager->pWal ){
@@ -58038,6 +58058,11 @@ SQLITE_PRIVATE int sqlite3PagerDirectReadOk(Pager *pPager, Pgno pgno){
     return iRead==0; /* Condition (4) */
   }
 #endif
+  assert( pPager->fd->pMethods->xDeviceCharacteristics!=0 );
+  if( (pPager->fd->pMethods->xDeviceCharacteristics(pPager->fd)
+        & SQLITE_IOCAP_SUBPAGE_READ)==0 ){
+    return 0; /* Case (2) */
+  }
   return 1;
 }
 #endif
@@ -59296,7 +59321,7 @@ static int pager_end_transaction(Pager *pPager, int hasSuper, int bCommit){
       }
       pPager->journalOff = 0;
     }else if( pPager->journalMode==PAGER_JOURNALMODE_PERSIST
-      || (pPager->exclusiveMode && pPager->journalMode!=PAGER_JOURNALMODE_WAL)
+      || (pPager->exclusiveMode && pPager->journalMode<PAGER_JOURNALMODE_WAL)
     ){
       rc = zeroJournalHdr(pPager, hasSuper||pPager->tempFile);
       pPager->journalOff = 0;
@@ -68006,11 +68031,7 @@ static int walBeginShmUnreliable(Wal *pWal, int *pChanged){
 */
 static int walTryBeginRead(Wal *pWal, int *pChanged, int useWal, int *pCnt){
   volatile WalCkptInfo *pInfo;    /* Checkpoint information in wal-index */
-  u32 mxReadMark;                 /* Largest aReadMark[] value */
-  int mxI;                        /* Index of largest aReadMark[] value */
-  int i;                          /* Loop counter */
   int rc = SQLITE_OK;             /* Return code  */
-  u32 mxFrame;                    /* Wal frame to lock to */
 #ifdef SQLITE_ENABLE_SETLK_TIMEOUT
   int nBlockTmout = 0;
 #endif
@@ -68116,141 +68137,147 @@ static int walTryBeginRead(Wal *pWal, int *pChanged, int useWal, int *pCnt){
   assert( pWal->apWiData[0]!=0 );
   pInfo = walCkptInfo(pWal);
   SEH_INJECT_FAULT;
-  if( !useWal && AtomicLoad(&pInfo->nBackfill)==pWal->hdr.mxFrame
+  {
+    u32 mxReadMark;               /* Largest aReadMark[] value */
+    int mxI;                      /* Index of largest aReadMark[] value */
+    int i;                        /* Loop counter */
+    u32 mxFrame;                  /* Wal frame to lock to */
+    if( !useWal && AtomicLoad(&pInfo->nBackfill)==pWal->hdr.mxFrame
 #ifdef SQLITE_ENABLE_SNAPSHOT
-   && ((pWal->bGetSnapshot==0 && pWal->pSnapshot==0) || pWal->hdr.mxFrame==0)
+     && ((pWal->bGetSnapshot==0 && pWal->pSnapshot==0) || pWal->hdr.mxFrame==0)
 #endif
-  ){
-    /* The WAL has been completely backfilled (or it is empty).
-    ** and can be safely ignored.
-    */
-    rc = walLockShared(pWal, WAL_READ_LOCK(0));
-    walShmBarrier(pWal);
-    if( rc==SQLITE_OK ){
-      if( memcmp((void *)walIndexHdr(pWal), &pWal->hdr, sizeof(WalIndexHdr)) ){
-        /* It is not safe to allow the reader to continue here if frames
-        ** may have been appended to the log before READ_LOCK(0) was obtained.
-        ** When holding READ_LOCK(0), the reader ignores the entire log file,
-        ** which implies that the database file contains a trustworthy
-        ** snapshot. Since holding READ_LOCK(0) prevents a checkpoint from
-        ** happening, this is usually correct.
-        **
-        ** However, if frames have been appended to the log (or if the log
-        ** is wrapped and written for that matter) before the READ_LOCK(0)
-        ** is obtained, that is not necessarily true. A checkpointer may
-        ** have started to backfill the appended frames but crashed before
-        ** it finished. Leaving a corrupt image in the database file.
-        */
-        walUnlockShared(pWal, WAL_READ_LOCK(0));
-        return WAL_RETRY;
-      }
-      pWal->readLock = 0;
-      return SQLITE_OK;
-    }else if( rc!=SQLITE_BUSY ){
-      return rc;
-    }
-  }
-
-  /* If we get this far, it means that the reader will want to use
-  ** the WAL to get at content from recent commits.  The job now is
-  ** to select one of the aReadMark[] entries that is closest to
-  ** but not exceeding pWal->hdr.mxFrame and lock that entry.
-  */
-  mxReadMark = 0;
-  mxI = 0;
-  mxFrame = pWal->hdr.mxFrame;
-#ifdef SQLITE_ENABLE_SNAPSHOT
-  if( pWal->pSnapshot && pWal->pSnapshot->mxFrame<mxFrame ){
-    mxFrame = pWal->pSnapshot->mxFrame;
-  }
-#endif
-  for(i=1; i<WAL_NREADER; i++){
-    u32 thisMark = AtomicLoad(pInfo->aReadMark+i); SEH_INJECT_FAULT;
-    if( mxReadMark<=thisMark && thisMark<=mxFrame ){
-      assert( thisMark!=READMARK_NOT_USED );
-      mxReadMark = thisMark;
-      mxI = i;
-    }
-  }
-  if( (pWal->readOnly & WAL_SHM_RDONLY)==0
-   && (mxReadMark<mxFrame || mxI==0)
-  ){
-    for(i=1; i<WAL_NREADER; i++){
-      rc = walLockExclusive(pWal, WAL_READ_LOCK(i), 1);
+    ){
+      /* The WAL has been completely backfilled (or it is empty).
+      ** and can be safely ignored.
+      */
+      rc = walLockShared(pWal, WAL_READ_LOCK(0));
+      walShmBarrier(pWal);
       if( rc==SQLITE_OK ){
-        AtomicStore(pInfo->aReadMark+i,mxFrame);
-        mxReadMark = mxFrame;
-        mxI = i;
-        walUnlockExclusive(pWal, WAL_READ_LOCK(i), 1);
-        break;
+        if( memcmp((void *)walIndexHdr(pWal), &pWal->hdr,sizeof(WalIndexHdr)) ){
+          /* It is not safe to allow the reader to continue here if frames
+          ** may have been appended to the log before READ_LOCK(0) was obtained.
+          ** When holding READ_LOCK(0), the reader ignores the entire log file,
+          ** which implies that the database file contains a trustworthy
+          ** snapshot. Since holding READ_LOCK(0) prevents a checkpoint from
+          ** happening, this is usually correct.
+          **
+          ** However, if frames have been appended to the log (or if the log
+          ** is wrapped and written for that matter) before the READ_LOCK(0)
+          ** is obtained, that is not necessarily true. A checkpointer may
+          ** have started to backfill the appended frames but crashed before
+          ** it finished. Leaving a corrupt image in the database file.
+          */
+          walUnlockShared(pWal, WAL_READ_LOCK(0));
+          return WAL_RETRY;
+        }
+        pWal->readLock = 0;
+        return SQLITE_OK;
       }else if( rc!=SQLITE_BUSY ){
         return rc;
       }
     }
-  }
-  if( mxI==0 ){
-    assert( rc==SQLITE_BUSY || (pWal->readOnly & WAL_SHM_RDONLY)!=0 );
-    return rc==SQLITE_BUSY ? WAL_RETRY : SQLITE_READONLY_CANTINIT;
-  }
 
-  (void)walEnableBlockingMs(pWal, nBlockTmout);
-  rc = walLockShared(pWal, WAL_READ_LOCK(mxI));
-  walDisableBlocking(pWal);
-  if( rc ){
-#ifdef SQLITE_ENABLE_SETLK_TIMEOUT
-    if( rc==SQLITE_BUSY_TIMEOUT ){
-      *pCnt |= WAL_RETRY_BLOCKED_MASK;
+    /* If we get this far, it means that the reader will want to use
+    ** the WAL to get at content from recent commits.  The job now is
+    ** to select one of the aReadMark[] entries that is closest to
+    ** but not exceeding pWal->hdr.mxFrame and lock that entry.
+    */
+    mxReadMark = 0;
+    mxI = 0;
+    mxFrame = pWal->hdr.mxFrame;
+#ifdef SQLITE_ENABLE_SNAPSHOT
+    if( pWal->pSnapshot && pWal->pSnapshot->mxFrame<mxFrame ){
+      mxFrame = pWal->pSnapshot->mxFrame;
     }
-#else
-    assert( rc!=SQLITE_BUSY_TIMEOUT );
 #endif
-    assert( (rc&0xFF)!=SQLITE_BUSY||rc==SQLITE_BUSY||rc==SQLITE_BUSY_TIMEOUT );
-    return (rc&0xFF)==SQLITE_BUSY ? WAL_RETRY : rc;
-  }
-  /* Now that the read-lock has been obtained, check that neither the
-  ** value in the aReadMark[] array or the contents of the wal-index
-  ** header have changed.
-  **
-  ** It is necessary to check that the wal-index header did not change
-  ** between the time it was read and when the shared-lock was obtained
-  ** on WAL_READ_LOCK(mxI) was obtained to account for the possibility
-  ** that the log file may have been wrapped by a writer, or that frames
-  ** that occur later in the log than pWal->hdr.mxFrame may have been
-  ** copied into the database by a checkpointer. If either of these things
-  ** happened, then reading the database with the current value of
-  ** pWal->hdr.mxFrame risks reading a corrupted snapshot. So, retry
-  ** instead.
-  **
-  ** Before checking that the live wal-index header has not changed
-  ** since it was read, set Wal.minFrame to the first frame in the wal
-  ** file that has not yet been checkpointed. This client will not need
-  ** to read any frames earlier than minFrame from the wal file - they
-  ** can be safely read directly from the database file.
-  **
-  ** Because a ShmBarrier() call is made between taking the copy of
-  ** nBackfill and checking that the wal-header in shared-memory still
-  ** matches the one cached in pWal->hdr, it is guaranteed that the
-  ** checkpointer that set nBackfill was not working with a wal-index
-  ** header newer than that cached in pWal->hdr. If it were, that could
-  ** cause a problem. The checkpointer could omit to checkpoint
-  ** a version of page X that lies before pWal->minFrame (call that version
-  ** A) on the basis that there is a newer version (version B) of the same
-  ** page later in the wal file. But if version B happens to like past
-  ** frame pWal->hdr.mxFrame - then the client would incorrectly assume
-  ** that it can read version A from the database file. However, since
-  ** we can guarantee that the checkpointer that set nBackfill could not
-  ** see any pages past pWal->hdr.mxFrame, this problem does not come up.
-  */
-  pWal->minFrame = AtomicLoad(&pInfo->nBackfill)+1; SEH_INJECT_FAULT;
-  walShmBarrier(pWal);
-  if( AtomicLoad(pInfo->aReadMark+mxI)!=mxReadMark
-   || memcmp((void *)walIndexHdr(pWal), &pWal->hdr, sizeof(WalIndexHdr))
-  ){
-    walUnlockShared(pWal, WAL_READ_LOCK(mxI));
-    return WAL_RETRY;
-  }else{
-    assert( mxReadMark<=pWal->hdr.mxFrame );
-    pWal->readLock = (i16)mxI;
+    for(i=1; i<WAL_NREADER; i++){
+      u32 thisMark = AtomicLoad(pInfo->aReadMark+i); SEH_INJECT_FAULT;
+      if( mxReadMark<=thisMark && thisMark<=mxFrame ){
+        assert( thisMark!=READMARK_NOT_USED );
+        mxReadMark = thisMark;
+        mxI = i;
+      }
+    }
+    if( (pWal->readOnly & WAL_SHM_RDONLY)==0
+     && (mxReadMark<mxFrame || mxI==0)
+    ){
+      for(i=1; i<WAL_NREADER; i++){
+        rc = walLockExclusive(pWal, WAL_READ_LOCK(i), 1);
+        if( rc==SQLITE_OK ){
+          AtomicStore(pInfo->aReadMark+i,mxFrame);
+          mxReadMark = mxFrame;
+          mxI = i;
+          walUnlockExclusive(pWal, WAL_READ_LOCK(i), 1);
+          break;
+        }else if( rc!=SQLITE_BUSY ){
+          return rc;
+        }
+      }
+    }
+    if( mxI==0 ){
+      assert( rc==SQLITE_BUSY || (pWal->readOnly & WAL_SHM_RDONLY)!=0 );
+      return rc==SQLITE_BUSY ? WAL_RETRY : SQLITE_READONLY_CANTINIT;
+    }
+
+    (void)walEnableBlockingMs(pWal, nBlockTmout);
+    rc = walLockShared(pWal, WAL_READ_LOCK(mxI));
+    walDisableBlocking(pWal);
+    if( rc ){
+#ifdef SQLITE_ENABLE_SETLK_TIMEOUT
+      if( rc==SQLITE_BUSY_TIMEOUT ){
+        *pCnt |= WAL_RETRY_BLOCKED_MASK;
+      }
+#else
+      assert( rc!=SQLITE_BUSY_TIMEOUT );
+#endif
+      assert((rc&0xFF)!=SQLITE_BUSY||rc==SQLITE_BUSY||rc==SQLITE_BUSY_TIMEOUT);
+      return (rc&0xFF)==SQLITE_BUSY ? WAL_RETRY : rc;
+    }
+    /* Now that the read-lock has been obtained, check that neither the
+    ** value in the aReadMark[] array or the contents of the wal-index
+    ** header have changed.
+    **
+    ** It is necessary to check that the wal-index header did not change
+    ** between the time it was read and when the shared-lock was obtained
+    ** on WAL_READ_LOCK(mxI) was obtained to account for the possibility
+    ** that the log file may have been wrapped by a writer, or that frames
+    ** that occur later in the log than pWal->hdr.mxFrame may have been
+    ** copied into the database by a checkpointer. If either of these things
+    ** happened, then reading the database with the current value of
+    ** pWal->hdr.mxFrame risks reading a corrupted snapshot. So, retry
+    ** instead.
+    **
+    ** Before checking that the live wal-index header has not changed
+    ** since it was read, set Wal.minFrame to the first frame in the wal
+    ** file that has not yet been checkpointed. This client will not need
+    ** to read any frames earlier than minFrame from the wal file - they
+    ** can be safely read directly from the database file.
+    **
+    ** Because a ShmBarrier() call is made between taking the copy of
+    ** nBackfill and checking that the wal-header in shared-memory still
+    ** matches the one cached in pWal->hdr, it is guaranteed that the
+    ** checkpointer that set nBackfill was not working with a wal-index
+    ** header newer than that cached in pWal->hdr. If it were, that could
+    ** cause a problem. The checkpointer could omit to checkpoint
+    ** a version of page X that lies before pWal->minFrame (call that version
+    ** A) on the basis that there is a newer version (version B) of the same
+    ** page later in the wal file. But if version B happens to like past
+    ** frame pWal->hdr.mxFrame - then the client would incorrectly assume
+    ** that it can read version A from the database file. However, since
+    ** we can guarantee that the checkpointer that set nBackfill could not
+    ** see any pages past pWal->hdr.mxFrame, this problem does not come up.
+    */
+    pWal->minFrame = AtomicLoad(&pInfo->nBackfill)+1; SEH_INJECT_FAULT;
+    walShmBarrier(pWal);
+    if( AtomicLoad(pInfo->aReadMark+mxI)!=mxReadMark
+     || memcmp((void *)walIndexHdr(pWal), &pWal->hdr, sizeof(WalIndexHdr))
+    ){
+      walUnlockShared(pWal, WAL_READ_LOCK(mxI));
+      return WAL_RETRY;
+    }else{
+      assert( mxReadMark<=pWal->hdr.mxFrame );
+      pWal->readLock = (i16)mxI;
+    }
   }
   return rc;
 }
@@ -87130,6 +87157,7 @@ SQLITE_PRIVATE void sqlite3VdbePrintOp(FILE *pOut, int pc, VdbeOp *pOp){
 ** will be initialized before use.
 */
 static void initMemArray(Mem *p, int N, sqlite3 *db, u16 flags){
+  assert( db!=0 );
   if( N>0 ){
     do{
       p->flags = flags;
@@ -87155,6 +87183,7 @@ static void releaseMemArray(Mem *p, int N){
   if( p && N ){
     Mem *pEnd = &p[N];
     sqlite3 *db = p->db;
+    assert( db!=0 );
     if( db->pnBytesFreed ){
       do{
         if( p->szMalloc ) sqlite3DbFree(db, p->zMalloc);
@@ -87635,6 +87664,7 @@ SQLITE_PRIVATE void sqlite3VdbeMakeReady(
   assert( pParse!=0 );
   assert( p->eVdbeState==VDBE_INIT_STATE );
   assert( pParse==p->pParse );
+  assert( pParse->db==p->db );
   p->pVList = pParse->pVList;
   pParse->pVList =  0;
   db = p->db;
@@ -90515,6 +90545,7 @@ SQLITE_PRIVATE void sqlite3VdbePreUpdateHook(
   sqlite3DbFree(db, preupdate.aRecord);
   vdbeFreeUnpacked(db, preupdate.keyinfo.nKeyField+1, preupdate.pUnpacked);
   vdbeFreeUnpacked(db, preupdate.keyinfo.nKeyField+1, preupdate.pNewUnpacked);
+  sqlite3VdbeMemRelease(&preupdate.oldipk);
   if( preupdate.aNew ){
     int i;
     for(i=0; i<pCsr->nField; i++){
@@ -91871,7 +91902,7 @@ static Mem *columnMem(sqlite3_stmt *pStmt, int i){
 **     sqlite3_column_int64()
 **     sqlite3_column_text()
 **     sqlite3_column_text16()
-**     sqlite3_column_real()
+**     sqlite3_column_double()
 **     sqlite3_column_bytes()
 **     sqlite3_column_bytes16()
 **     sqlite3_column_blob()
@@ -92733,60 +92764,64 @@ SQLITE_API int sqlite3_preupdate_old(sqlite3 *db, int iIdx, sqlite3_value **ppVa
     goto preupdate_old_out;
   }
 
-  /* If the old.* record has not yet been loaded into memory, do so now. */
-  if( p->pUnpacked==0 ){
-    u32 nRec;
-    u8 *aRec;
-
-    assert( p->pCsr->eCurType==CURTYPE_BTREE );
-    nRec = sqlite3BtreePayloadSize(p->pCsr->uc.pCursor);
-    aRec = sqlite3DbMallocRaw(db, nRec);
-    if( !aRec ) goto preupdate_old_out;
-    rc = sqlite3BtreePayload(p->pCsr->uc.pCursor, 0, nRec, aRec);
-    if( rc==SQLITE_OK ){
-      p->pUnpacked = vdbeUnpackRecord(&p->keyinfo, nRec, aRec);
-      if( !p->pUnpacked ) rc = SQLITE_NOMEM;
-    }
-    if( rc!=SQLITE_OK ){
-      sqlite3DbFree(db, aRec);
-      goto preupdate_old_out;
-    }
-    p->aRecord = aRec;
-  }
-
-  pMem = *ppValue = &p->pUnpacked->aMem[iIdx];
   if( iIdx==p->pTab->iPKey ){
+    *ppValue = pMem = &p->oldipk;
     sqlite3VdbeMemSetInt64(pMem, p->iKey1);
-  }else if( iIdx>=p->pUnpacked->nField ){
-    /* This occurs when the table has been extended using ALTER TABLE
-    ** ADD COLUMN. The value to return is the default value of the column. */
-    Column *pCol = &p->pTab->aCol[iIdx];
-    if( pCol->iDflt>0 ){
-      if( p->apDflt==0 ){
-        int nByte = sizeof(sqlite3_value*)*p->pTab->nCol;
-        p->apDflt = (sqlite3_value**)sqlite3DbMallocZero(db, nByte);
-        if( p->apDflt==0 ) goto preupdate_old_out;
+  }else{
+
+    /* If the old.* record has not yet been loaded into memory, do so now. */
+    if( p->pUnpacked==0 ){
+      u32 nRec;
+      u8 *aRec;
+
+      assert( p->pCsr->eCurType==CURTYPE_BTREE );
+      nRec = sqlite3BtreePayloadSize(p->pCsr->uc.pCursor);
+      aRec = sqlite3DbMallocRaw(db, nRec);
+      if( !aRec ) goto preupdate_old_out;
+      rc = sqlite3BtreePayload(p->pCsr->uc.pCursor, 0, nRec, aRec);
+      if( rc==SQLITE_OK ){
+        p->pUnpacked = vdbeUnpackRecord(&p->keyinfo, nRec, aRec);
+        if( !p->pUnpacked ) rc = SQLITE_NOMEM;
       }
-      if( p->apDflt[iIdx]==0 ){
-        sqlite3_value *pVal = 0;
-        Expr *pDflt;
-        assert( p->pTab!=0 && IsOrdinaryTable(p->pTab) );
-        pDflt = p->pTab->u.tab.pDfltList->a[pCol->iDflt-1].pExpr;
-        rc = sqlite3ValueFromExpr(db, pDflt, ENC(db), pCol->affinity, &pVal);
-        if( rc==SQLITE_OK && pVal==0 ){
-          rc = SQLITE_CORRUPT_BKPT;
-        }
-        p->apDflt[iIdx] = pVal;
+      if( rc!=SQLITE_OK ){
+        sqlite3DbFree(db, aRec);
+        goto preupdate_old_out;
       }
-      *ppValue = p->apDflt[iIdx];
-    }else{
-      *ppValue = (sqlite3_value *)columnNullValue();
+      p->aRecord = aRec;
     }
-  }else if( p->pTab->aCol[iIdx].affinity==SQLITE_AFF_REAL ){
-    if( pMem->flags & (MEM_Int|MEM_IntReal) ){
-      testcase( pMem->flags & MEM_Int );
-      testcase( pMem->flags & MEM_IntReal );
-      sqlite3VdbeMemRealify(pMem);
+
+    pMem = *ppValue = &p->pUnpacked->aMem[iIdx];
+    if( iIdx>=p->pUnpacked->nField ){
+      /* This occurs when the table has been extended using ALTER TABLE
+      ** ADD COLUMN. The value to return is the default value of the column. */
+      Column *pCol = &p->pTab->aCol[iIdx];
+      if( pCol->iDflt>0 ){
+        if( p->apDflt==0 ){
+          int nByte = sizeof(sqlite3_value*)*p->pTab->nCol;
+          p->apDflt = (sqlite3_value**)sqlite3DbMallocZero(db, nByte);
+          if( p->apDflt==0 ) goto preupdate_old_out;
+        }
+        if( p->apDflt[iIdx]==0 ){
+          sqlite3_value *pVal = 0;
+          Expr *pDflt;
+          assert( p->pTab!=0 && IsOrdinaryTable(p->pTab) );
+          pDflt = p->pTab->u.tab.pDfltList->a[pCol->iDflt-1].pExpr;
+          rc = sqlite3ValueFromExpr(db, pDflt, ENC(db), pCol->affinity, &pVal);
+          if( rc==SQLITE_OK && pVal==0 ){
+            rc = SQLITE_CORRUPT_BKPT;
+          }
+          p->apDflt[iIdx] = pVal;
+        }
+        *ppValue = p->apDflt[iIdx];
+      }else{
+        *ppValue = (sqlite3_value *)columnNullValue();
+      }
+    }else if( p->pTab->aCol[iIdx].affinity==SQLITE_AFF_REAL ){
+      if( pMem->flags & (MEM_Int|MEM_IntReal) ){
+        testcase( pMem->flags & MEM_Int );
+        testcase( pMem->flags & MEM_IntReal );
+        sqlite3VdbeMemRealify(pMem);
+      }
     }
   }
 
@@ -97940,9 +97975,11 @@ case OP_OpenEphemeral: {     /* ncycle */
         }
       }
       pCx->isOrdered = (pOp->p5!=BTREE_UNORDERED);
+      assert( p->apCsr[pOp->p1]==pCx );
       if( rc ){
         assert( !sqlite3BtreeClosesWithCursor(pCx->ub.pBtx, pCx->uc.pCursor) );
         sqlite3BtreeClose(pCx->ub.pBtx);
+        p->apCsr[pOp->p1] = 0;  /* Not required; helps with static analysis */
       }else{
         assert( sqlite3BtreeClosesWithCursor(pCx->ub.pBtx, pCx->uc.pCursor) );
       }
@@ -109872,7 +109909,7 @@ static int codeCompare(
   p5 = binaryCompareP5(pLeft, pRight, jumpIfNull);
   addr = sqlite3VdbeAddOp4(pParse->pVdbe, opcode, in2, dest, in1,
                            (void*)p4, P4_COLLSEQ);
-  sqlite3VdbeChangeP5(pParse->pVdbe, (u8)p5);
+  sqlite3VdbeChangeP5(pParse->pVdbe, (u16)p5);
   return addr;
 }
 
@@ -112039,7 +112076,7 @@ static int sqlite3ExprIsTableConstant(Expr *p, int iCur, int bAllowSubq){
 **         (4a)  pExpr must come from an ON clause..
 **         (4b)  and specifically the ON clause associated with the LEFT JOIN.
 **
-**   (5)  If pSrc is not the right operand of a LEFT JOIN or the left
+**   (5)  If pSrc is the right operand of a LEFT JOIN or the left
 **        operand of a RIGHT JOIN, then pExpr must be from the WHERE
 **        clause, not an ON clause.
 **
@@ -112678,6 +112715,7 @@ SQLITE_PRIVATE int sqlite3FindInIndex(
             if( aiMap ) aiMap[i] = j;
           }
 
+          assert( nExpr>0 && nExpr<BMS );
           assert( i==nExpr || colUsed!=(MASKBIT(nExpr)-1) );
           if( colUsed==(MASKBIT(nExpr)-1) ){
             /* If we reach this point, that means the index pIdx is usable */
@@ -115573,16 +115611,23 @@ SQLITE_PRIVATE void sqlite3ExprIfFalseDup(Parse *pParse, Expr *pExpr, int dest,i
 ** same as that currently bound to variable pVar, non-zero is returned.
 ** Otherwise, if the values are not the same or if pExpr is not a simple
 ** SQL value, zero is returned.
+**
+** If the SQLITE_EnableQPSG flag is set on the database connection, then
+** this routine always returns false.
 */
-static int exprCompareVariable(
+static SQLITE_NOINLINE int exprCompareVariable(
   const Parse *pParse,
   const Expr *pVar,
   const Expr *pExpr
 ){
-  int res = 0;
+  int res = 2;
   int iVar;
   sqlite3_value *pL, *pR = 0;
 
+  if( pExpr->op==TK_VARIABLE && pVar->iColumn==pExpr->iColumn ){
+    return 0;
+  }
+  if( (pParse->db->flags & SQLITE_EnableQPSG)!=0 ) return 2;
   sqlite3ValueFromExpr(pParse->db, pExpr, SQLITE_UTF8, SQLITE_AFF_BLOB, &pR);
   if( pR ){
     iVar = pVar->iColumn;
@@ -115592,12 +115637,11 @@ static int exprCompareVariable(
       if( sqlite3_value_type(pL)==SQLITE_TEXT ){
         sqlite3_value_text(pL); /* Make sure the encoding is UTF-8 */
       }
-      res =  0==sqlite3MemCompare(pL, pR, 0);
+      res = sqlite3MemCompare(pL, pR, 0) ? 2 : 0;
     }
     sqlite3ValueFree(pR);
     sqlite3ValueFree(pL);
   }
-
   return res;
 }
 
@@ -115623,12 +115667,10 @@ static int exprCompareVariable(
 ** just might result in some slightly slower code.  But returning
 ** an incorrect 0 or 1 could lead to a malfunction.
 **
-** If pParse is not NULL then TK_VARIABLE terms in pA with bindings in
-** pParse->pReprepare can be matched against literals in pB.  The
-** pParse->pVdbe->expmask bitmask is updated for each variable referenced.
-** If pParse is NULL (the normal case) then any TK_VARIABLE term in
-** Argument pParse should normally be NULL. If it is not NULL and pA or
-** pB causes a return value of 2.
+** If pParse is not NULL and SQLITE_EnableQPSG is off then TK_VARIABLE
+** terms in pA with bindings in pParse->pReprepare can be matched against
+** literals in pB.  The pParse->pVdbe->expmask bitmask is updated for
+** each variable referenced.
 */
 SQLITE_PRIVATE int sqlite3ExprCompare(
   const Parse *pParse,
@@ -115640,8 +115682,8 @@ SQLITE_PRIVATE int sqlite3ExprCompare(
   if( pA==0 || pB==0 ){
     return pB==pA ? 0 : 2;
   }
-  if( pParse && pA->op==TK_VARIABLE && exprCompareVariable(pParse, pA, pB) ){
-    return 0;
+  if( pParse && pA->op==TK_VARIABLE ){
+    return exprCompareVariable(pParse, pA, pB);
   }
   combinedFlags = pA->flags | pB->flags;
   if( combinedFlags & EP_IntValue ){
@@ -115837,17 +115879,69 @@ static int exprImpliesNotNull(
 }
 
 /*
+** Return true if the boolean value of the expression is always either
+** FALSE or NULL.
+*/
+static int sqlite3ExprIsNotTrue(Expr *pExpr){
+  int v;
+  if( pExpr->op==TK_NULL ) return 1;
+  if( pExpr->op==TK_TRUEFALSE && sqlite3ExprTruthValue(pExpr)==0 ) return 1;
+  v = 1;
+  if( sqlite3ExprIsInteger(pExpr, &v, 0) && v==0 ) return 1;
+  return 0;
+}
+
+/*
+** Return true if the expression is one of the following:
+**
+**    CASE WHEN x THEN y END
+**    CASE WHEN x THEN y ELSE NULL END
+**    CASE WHEN x THEN y ELSE false END
+**    iif(x,y)
+**    iif(x,y,NULL)
+**    iif(x,y,false)
+*/
+static int sqlite3ExprIsIIF(sqlite3 *db, const Expr *pExpr){
+  ExprList *pList;
+  if( pExpr->op==TK_FUNCTION ){
+    const char *z = pExpr->u.zToken;
+    FuncDef *pDef;
+    if( (z[0]!='i' && z[0]!='I') ) return 0;
+    if( pExpr->x.pList==0 ) return 0;
+    pDef = sqlite3FindFunction(db, z, pExpr->x.pList->nExpr, ENC(db), 0);
+#ifdef SQLITE_ENABLE_UNKNOWN_SQL_FUNCTION
+    if( pDef==0 ) return 0;
+#else
+    if( NEVER(pDef==0) ) return 0;
+#endif
+    if( (pDef->funcFlags & SQLITE_FUNC_INLINE)==0 ) return 0;
+    if( SQLITE_PTR_TO_INT(pDef->pUserData)!=INLINEFUNC_iif ) return 0;
+  }else if( pExpr->op==TK_CASE ){
+    if( pExpr->pLeft!=0 ) return 0;
+  }else{
+    return 0;
+  }
+  pList = pExpr->x.pList;
+  assert( pList!=0 );
+  if( pList->nExpr==2 ) return 1;
+  if( pList->nExpr==3 && sqlite3ExprIsNotTrue(pList->a[2].pExpr) ) return 1;
+  return 0;
+}
+
+/*
 ** Return true if we can prove the pE2 will always be true if pE1 is
 ** true.  Return false if we cannot complete the proof or if pE2 might
 ** be false.  Examples:
 **
-**     pE1: x==5       pE2: x==5             Result: true
-**     pE1: x>0        pE2: x==5             Result: false
-**     pE1: x=21       pE2: x=21 OR y=43     Result: true
-**     pE1: x!=123     pE2: x IS NOT NULL    Result: true
-**     pE1: x!=?1      pE2: x IS NOT NULL    Result: true
-**     pE1: x IS NULL  pE2: x IS NOT NULL    Result: false
-**     pE1: x IS ?2    pE2: x IS NOT NULL    Result: false
+**     pE1: x==5        pE2: x==5             Result: true
+**     pE1: x>0         pE2: x==5             Result: false
+**     pE1: x=21        pE2: x=21 OR y=43     Result: true
+**     pE1: x!=123      pE2: x IS NOT NULL    Result: true
+**     pE1: x!=?1       pE2: x IS NOT NULL    Result: true
+**     pE1: x IS NULL   pE2: x IS NOT NULL    Result: false
+**     pE1: x IS ?2     pE2: x IS NOT NULL    Result: false
+**     pE1: iif(x,y)    pE2: x                Result: true
+**     PE1: iif(x,y,0)  pE2: x                Result: true
 **
 ** When comparing TK_COLUMN nodes between pE1 and pE2, if pE2 has
 ** Expr.iTable<0 then assume a table number given by iTab.
@@ -115880,6 +115974,9 @@ SQLITE_PRIVATE int sqlite3ExprImpliesExpr(
    && exprImpliesNotNull(pParse, pE1, pE2->pLeft, iTab, 0)
   ){
     return 1;
+  }
+  if( sqlite3ExprIsIIF(pParse->db, pE1) ){
+    return sqlite3ExprImpliesExpr(pParse,pE1->x.pList->a[0].pExpr,pE2,iTab);
   }
   return 0;
 }
@@ -121292,15 +121389,6 @@ static void attachFunc(
     sqlite3BtreeLeaveAll(db);
     assert( zErrDyn==0 || rc!=SQLITE_OK );
   }
-#ifdef SQLITE_USER_AUTHENTICATION
-  if( rc==SQLITE_OK && !REOPEN_AS_MEMDB(db) ){
-    u8 newAuth = 0;
-    rc = sqlite3UserAuthCheckLogin(db, zName, &newAuth);
-    if( newAuth<db->auth.authLevel ){
-      rc = SQLITE_AUTH_USER;
-    }
-  }
-#endif
   if( rc ){
     if( ALWAYS(!REOPEN_AS_MEMDB(db)) ){
       int iDb = db->nDb - 1;
@@ -121798,11 +121886,7 @@ SQLITE_PRIVATE int sqlite3AuthReadCol(
   int rc;                            /* Auth callback return code */
 
   if( db->init.busy ) return SQLITE_OK;
-  rc = db->xAuth(db->pAuthArg, SQLITE_READ, zTab,zCol,zDb,pParse->zAuthContext
-#ifdef SQLITE_USER_AUTHENTICATION
-                 ,db->auth.zAuthUser
-#endif
-                );
+  rc = db->xAuth(db->pAuthArg, SQLITE_READ, zTab,zCol,zDb,pParse->zAuthContext);
   if( rc==SQLITE_DENY ){
     char *z = sqlite3_mprintf("%s.%s", zTab, zCol);
     if( db->nDb>2 || iDb!=0 ) z = sqlite3_mprintf("%s.%z", zDb, z);
@@ -121909,11 +121993,7 @@ SQLITE_PRIVATE int sqlite3AuthCheck(
   testcase( zArg3==0 );
   testcase( pParse->zAuthContext==0 );
 
-  rc = db->xAuth(db->pAuthArg, code, zArg1, zArg2, zArg3, pParse->zAuthContext
-#ifdef SQLITE_USER_AUTHENTICATION
-                 ,db->auth.zAuthUser
-#endif
-                );
+  rc = db->xAuth(db->pAuthArg,code,zArg1,zArg2,zArg3,pParse->zAuthContext);
   if( rc==SQLITE_DENY ){
     sqlite3ErrorMsg(pParse, "not authorized");
     pParse->rc = SQLITE_AUTH;
@@ -122146,17 +122226,6 @@ SQLITE_PRIVATE void sqlite3FinishCoding(Parse *pParse){
     }
     sqlite3VdbeAddOp0(v, OP_Halt);
 
-#if SQLITE_USER_AUTHENTICATION && !defined(SQLITE_OMIT_SHARED_CACHE)
-    if( pParse->nTableLock>0 && db->init.busy==0 ){
-      sqlite3UserAuthInit(db);
-      if( db->auth.authLevel<UAUTH_User ){
-        sqlite3ErrorMsg(pParse, "user not authenticated");
-        pParse->rc = SQLITE_AUTH_USER;
-        return;
-      }
-    }
-#endif
-
     /* The cookie mask contains one bit for each database file open.
     ** (Bit 0 is for main, bit 1 is for temp, and so forth.)  Bits are
     ** set for each database that is used.  Generate code to start a
@@ -122285,16 +122354,6 @@ SQLITE_PRIVATE void sqlite3NestedParse(Parse *pParse, const char *zFormat, ...){
   pParse->nested--;
 }
 
-#if SQLITE_USER_AUTHENTICATION
-/*
-** Return TRUE if zTable is the name of the system table that stores the
-** list of users and their access credentials.
-*/
-SQLITE_PRIVATE int sqlite3UserAuthTable(const char *zTable){
-  return sqlite3_stricmp(zTable, "sqlite_user")==0;
-}
-#endif
-
 /*
 ** Locate the in-memory structure that describes a particular database
 ** table given the name of that table and (optionally) the name of the
@@ -122313,13 +122372,6 @@ SQLITE_PRIVATE Table *sqlite3FindTable(sqlite3 *db, const char *zName, const cha
 
   /* All mutexes are required for schema access.  Make sure we hold them. */
   assert( zDatabase!=0 || sqlite3BtreeHoldsAllMutexes(db) );
-#if SQLITE_USER_AUTHENTICATION
-  /* Only the admin user is allowed to know that the sqlite_user table
-  ** exists */
-  if( db->auth.authLevel<UAUTH_Admin && sqlite3UserAuthTable(zName)!=0 ){
-    return 0;
-  }
-#endif
   if( zDatabase ){
     for(i=0; i<db->nDb; i++){
       if( sqlite3StrICmp(zDatabase, db->aDb[i].zDbSName)==0 ) break;
@@ -125978,9 +126030,6 @@ SQLITE_PRIVATE void sqlite3CreateIndex(
   if( sqlite3StrNICmp(pTab->zName, "sqlite_", 7)==0
        && db->init.busy==0
        && pTblName!=0
-#if SQLITE_USER_AUTHENTICATION
-       && sqlite3UserAuthTable(pTab->zName)==0
-#endif
   ){
     sqlite3ErrorMsg(pParse, "table %s may not be indexed", pTab->zName);
     goto exit_create_index;
@@ -129688,7 +129737,6 @@ static void substrFunc(
   int len;
   int p0type;
   i64 p1, p2;
-  int negP2 = 0;
 
   assert( argc==3 || argc==2 );
   if( sqlite3_value_type(argv[1])==SQLITE_NULL
@@ -129697,7 +129745,7 @@ static void substrFunc(
     return;
   }
   p0type = sqlite3_value_type(argv[0]);
-  p1 = sqlite3_value_int(argv[1]);
+  p1 = sqlite3_value_int64(argv[1]);
   if( p0type==SQLITE_BLOB ){
     len = sqlite3_value_bytes(argv[0]);
     z = sqlite3_value_blob(argv[0]);
@@ -129722,19 +129770,18 @@ static void substrFunc(
   if( p1==0 ) p1 = 1; /* <rdar://problem/6778339> */
 #endif
   if( argc==3 ){
-    p2 = sqlite3_value_int(argv[2]);
-    if( p2<0 ){
-      p2 = -p2;
-      negP2 = 1;
-    }
+    p2 = sqlite3_value_int64(argv[2]);
   }else{
     p2 = sqlite3_context_db_handle(context)->aLimit[SQLITE_LIMIT_LENGTH];
   }
   if( p1<0 ){
     p1 += len;
     if( p1<0 ){
-      p2 += p1;
-      if( p2<0 ) p2 = 0;
+      if( p2<0 ){
+        p2 = 0;
+      }else{
+        p2 += p1;
+      }
       p1 = 0;
     }
   }else if( p1>0 ){
@@ -129742,12 +129789,13 @@ static void substrFunc(
   }else if( p2>0 ){
     p2--;
   }
-  if( negP2 ){
-    p1 -= p2;
-    if( p1<0 ){
-      p2 += p1;
-      p1 = 0;
+  if( p2<0 ){
+    if( p2<-p1 ){
+      p2 = p1;
+    }else{
+      p2 = -p2;
     }
+    p1 -= p2;
   }
   assert( p1>=0 && p2>=0 );
   if( p0type!=SQLITE_BLOB ){
@@ -129761,9 +129809,11 @@ static void substrFunc(
     sqlite3_result_text64(context, (char*)z, z2-z, SQLITE_TRANSIENT,
                           SQLITE_UTF8);
   }else{
-    if( p1+p2>len ){
+    if( p1>=len ){
+      p1 = p2 = 0;
+    }else if( p2>len-p1 ){
       p2 = len-p1;
-      if( p2<0 ) p2 = 0;
+      assert( p2>0 );
     }
     sqlite3_result_blob64(context, (char*)&z[p1], (u64)p2, SQLITE_TRANSIENT);
   }
@@ -129774,13 +129824,13 @@ static void substrFunc(
 */
 #ifndef SQLITE_OMIT_FLOATING_POINT
 static void roundFunc(sqlite3_context *context, int argc, sqlite3_value **argv){
-  int n = 0;
+  i64 n = 0;
   double r;
   char *zBuf;
   assert( argc==1 || argc==2 );
   if( argc==2 ){
     if( SQLITE_NULL==sqlite3_value_type(argv[1]) ) return;
-    n = sqlite3_value_int(argv[1]);
+    n = sqlite3_value_int64(argv[1]);
     if( n>30 ) n = 30;
     if( n<0 ) n = 0;
   }
@@ -129795,7 +129845,7 @@ static void roundFunc(sqlite3_context *context, int argc, sqlite3_value **argv){
   }else if( n==0 ){
     r = (double)((sqlite_int64)(r+(r<0?-0.5:+0.5)));
   }else{
-    zBuf = sqlite3_mprintf("%!.*f",n,r);
+    zBuf = sqlite3_mprintf("%!.*f",(int)n,r);
     if( zBuf==0 ){
       sqlite3_result_error_nomem(context);
       return;
@@ -132012,9 +132062,6 @@ SQLITE_PRIVATE void sqlite3RegisterBuiltinFunctions(void){
     SFUNCTION(load_extension,    1, 0, 0, loadExt          ),
     SFUNCTION(load_extension,    2, 0, 0, loadExt          ),
 #endif
-#if SQLITE_USER_AUTHENTICATION
-    FUNCTION(sqlite_crypt,       2, 0, 0, sqlite3CryptFunc ),
-#endif
 #ifndef SQLITE_OMIT_COMPILEOPTION_DIAGS
     DFUNCTION(sqlite_compileoption_used,1, 0, 0, compileoptionusedFunc  ),
     DFUNCTION(sqlite_compileoption_get, 1, 0, 0, compileoptiongetFunc  ),
@@ -132151,7 +132198,10 @@ SQLITE_PRIVATE void sqlite3RegisterBuiltinFunctions(void){
 #endif /* SQLITE_ENABLE_MATH_FUNCTIONS */
     FUNCTION(sign,               1, 0, 0,      signFunc    ),
     INLINE_FUNC(coalesce,       -1, INLINEFUNC_coalesce, 0 ),
+    INLINE_FUNC(iif,             2, INLINEFUNC_iif,      0 ),
     INLINE_FUNC(iif,             3, INLINEFUNC_iif,      0 ),
+    INLINE_FUNC(if,              2, INLINEFUNC_iif,      0 ),
+    INLINE_FUNC(if,              3, INLINEFUNC_iif,      0 ),
   };
 #ifndef SQLITE_OMIT_ALTERTABLE
   sqlite3AlterFunctions();
@@ -140664,12 +140714,6 @@ SQLITE_PRIVATE void sqlite3Pragma(
         ** in auto-commit mode.  */
         mask &= ~(SQLITE_ForeignKeys);
       }
-#if SQLITE_USER_AUTHENTICATION
-      if( db->auth.authLevel==UAUTH_User ){
-        /* Do not allow non-admin users to modify the schema arbitrarily */
-        mask &= ~(SQLITE_WriteSchema);
-      }
-#endif
 
       if( sqlite3GetBoolean(zRight, 0) ){
         if( (mask & SQLITE_WriteSchema)==0
@@ -140805,7 +140849,8 @@ SQLITE_PRIVATE void sqlite3Pragma(
             char *zSql = sqlite3MPrintf(db, "SELECT*FROM\"%w\"", pTab->zName);
             if( zSql ){
               sqlite3_stmt *pDummy = 0;
-              (void)sqlite3_prepare(db, zSql, -1, &pDummy, 0);
+              (void)sqlite3_prepare_v3(db, zSql, -1, SQLITE_PREPARE_DONT_LOG,
+                                       &pDummy, 0);
               (void)sqlite3_finalize(pDummy);
               sqlite3DbFree(db, zSql);
             }
@@ -141286,7 +141331,7 @@ SQLITE_PRIVATE void sqlite3Pragma(
 
       /* Do the b-tree integrity checks */
       sqlite3VdbeAddOp4(v, OP_IntegrityCk, 1, cnt, 8, (char*)aRoot,P4_INTARRAY);
-      sqlite3VdbeChangeP5(v, (u8)i);
+      sqlite3VdbeChangeP5(v, (u16)i);
       addr = sqlite3VdbeAddOp1(v, OP_IsNull, 2); VdbeCoverage(v);
       sqlite3VdbeAddOp4(v, OP_String8, 0, 3, 0,
          sqlite3MPrintf(db, "*** in database %s ***\n", db->aDb[i].zDbSName),
@@ -142906,14 +142951,7 @@ SQLITE_PRIVATE int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg, u32 mFl
 #else
       encoding = SQLITE_UTF8;
 #endif
-      if( db->nVdbeActive>0 && encoding!=ENC(db)
-       && (db->mDbFlags & DBFLAG_Vacuum)==0
-      ){
-        rc = SQLITE_LOCKED;
-        goto initone_error_out;
-      }else{
-        sqlite3SetTextEncoding(db, encoding);
-      }
+      sqlite3SetTextEncoding(db, encoding);
     }else{
       /* If opening an attached database, the encoding much match ENC(db) */
       if( (meta[BTREE_TEXT_ENCODING-1] & 3)!=ENC(db) ){
@@ -148373,6 +148411,7 @@ static int flattenSubquery(
     /* Transfer the FROM clause terms from the subquery into the
     ** outer query.
     */
+    iNewParent = pSubSrc->a[0].iCursor;
     for(i=0; i<nSubSrc; i++){
       SrcItem *pItem = &pSrc->a[i+iFrom];
       assert( pItem->fg.isTabFunc==0 );
@@ -148382,7 +148421,6 @@ static int flattenSubquery(
       if( pItem->fg.isUsing ) sqlite3IdListDelete(db, pItem->u3.pUsing);
       *pItem = pSubSrc->a[i];
       pItem->fg.jointype |= ltorj;
-      iNewParent = pSubSrc->a[i].iCursor;
       memset(&pSubSrc->a[i], 0, sizeof(pSubSrc->a[i]));
     }
     pSrc->a[iFrom].fg.jointype &= JT_LTORJ;
@@ -148422,6 +148460,7 @@ static int flattenSubquery(
     pWhere = pSub->pWhere;
     pSub->pWhere = 0;
     if( isOuterJoin>0 ){
+      assert( pSubSrc->nSrc==1 );
       sqlite3SetJoinExpr(pWhere, iNewParent, EP_OuterON);
     }
     if( pWhere ){
@@ -150525,7 +150564,7 @@ static void finalizeAggFunctions(Parse *pParse, AggInfo *pAggInfo){
       }
       sqlite3VdbeAddOp3(v, OP_AggStep, 0, regAgg, AggInfoFuncReg(pAggInfo,i));
       sqlite3VdbeAppendP4(v, pF->pFunc, P4_FUNCDEF);
-      sqlite3VdbeChangeP5(v, (u8)nArg);
+      sqlite3VdbeChangeP5(v, (u16)nArg);
       sqlite3VdbeAddOp2(v, OP_Next, pF->iOBTab, iTop+1); VdbeCoverage(v);
       sqlite3VdbeJumpHere(v, iTop);
       sqlite3ReleaseTempRange(pParse, regAgg, nArg);
@@ -150688,7 +150727,7 @@ static void updateAccumulator(
       }
       sqlite3VdbeAddOp3(v, OP_AggStep, 0, regAgg, AggInfoFuncReg(pAggInfo,i));
       sqlite3VdbeAppendP4(v, pF->pFunc, P4_FUNCDEF);
-      sqlite3VdbeChangeP5(v, (u8)nArg);
+      sqlite3VdbeChangeP5(v, (u16)nArg);
       sqlite3ReleaseTempRange(pParse, regAgg, nArg);
     }
     if( addrNext ){
@@ -151521,7 +151560,7 @@ SQLITE_PRIVATE int sqlite3Select(
 #endif
       assert( pSubq->pSelect && (pSub->selFlags & SF_PushDown)!=0 );
     }else{
-      TREETRACE(0x4000,pParse,p,("WHERE-lcause push-down not possible\n"));
+      TREETRACE(0x4000,pParse,p,("WHERE-clause push-down not possible\n"));
     }
 
     /* Convert unused result columns of the subquery into simple NULL
@@ -154082,7 +154121,7 @@ SQLITE_PRIVATE void sqlite3CodeRowTriggerDirect(
     ** invocation is disallowed if (a) the sub-program is really a trigger,
     ** not a foreign key action, and (b) the flag to enable recursive triggers
     ** is clear.  */
-    sqlite3VdbeChangeP5(v, (u8)bRecursive);
+    sqlite3VdbeChangeP5(v, (u16)bRecursive);
   }
 }
 
@@ -158295,9 +158334,17 @@ SQLITE_PRIVATE int sqlite3WhereExplainBloomFilter(
   const WhereInfo *pWInfo,        /* WHERE clause */
   const WhereLevel *pLevel        /* Bloom filter on this level */
 );
+SQLITE_PRIVATE void sqlite3WhereAddExplainText(
+  Parse *pParse,                  /* Parse context */
+  int addr,
+  SrcList *pTabList,              /* Table list this loop refers to */
+  WhereLevel *pLevel,             /* Scan to write OP_Explain opcode for */
+  u16 wctrlFlags                  /* Flags passed to sqlite3WhereBegin() */
+);
 #else
 # define sqlite3WhereExplainOneScan(u,v,w,x) 0
 # define sqlite3WhereExplainBloomFilter(u,v,w) 0
+# define  sqlite3WhereAddExplainText(u,v,w,x,y)
 #endif /* SQLITE_OMIT_EXPLAIN */
 #ifdef SQLITE_ENABLE_STMT_SCANSTATUS
 SQLITE_PRIVATE void sqlite3WhereAddScanStatus(
@@ -158499,38 +158546,38 @@ static void explainIndexRange(StrAccum *pStr, WhereLoop *pLoop){
 }
 
 /*
-** This function is a no-op unless currently processing an EXPLAIN QUERY PLAN
-** command, or if stmt_scanstatus_v2() stats are enabled, or if SQLITE_DEBUG
-** was defined at compile-time. If it is not a no-op, a single OP_Explain
-** opcode is added to the output to describe the table scan strategy in pLevel.
-**
-** If an OP_Explain opcode is added to the VM, its address is returned.
-** Otherwise, if no OP_Explain is coded, zero is returned.
+** This function sets the P4 value of an existing OP_Explain opcode to
+** text describing the loop in pLevel. If the OP_Explain opcode already has
+** a P4 value, it is freed before it is overwritten.
 */
-SQLITE_PRIVATE int sqlite3WhereExplainOneScan(
+SQLITE_PRIVATE void sqlite3WhereAddExplainText(
   Parse *pParse,                  /* Parse context */
+  int addr,                       /* Address of OP_Explain opcode */
   SrcList *pTabList,              /* Table list this loop refers to */
   WhereLevel *pLevel,             /* Scan to write OP_Explain opcode for */
   u16 wctrlFlags                  /* Flags passed to sqlite3WhereBegin() */
 ){
-  int ret = 0;
 #if !defined(SQLITE_DEBUG)
   if( sqlite3ParseToplevel(pParse)->explain==2 || IS_STMT_SCANSTATUS(pParse->db) )
 #endif
   {
+    VdbeOp *pOp = sqlite3VdbeGetOp(pParse->pVdbe, addr);
+
     SrcItem *pItem = &pTabList->a[pLevel->iFrom];
-    Vdbe *v = pParse->pVdbe;      /* VM being constructed */
     sqlite3 *db = pParse->db;     /* Database handle */
     int isSearch;                 /* True for a SEARCH. False for SCAN. */
     WhereLoop *pLoop;             /* The controlling WhereLoop object */
     u32 flags;                    /* Flags that describe this loop */
+#if defined(SQLITE_DEBUG) && !defined(SQLITE_OMIT_EXPLAIN)
     char *zMsg;                   /* Text to add to EQP output */
+#endif
     StrAccum str;                 /* EQP output string */
     char zBuf[100];               /* Initial space for EQP output string */
 
+    if( db->mallocFailed ) return;
+
     pLoop = pLevel->pWLoop;
     flags = pLoop->wsFlags;
-    if( (flags&WHERE_MULTI_OR) || (wctrlFlags&WHERE_OR_SUBCLAUSE) ) return 0;
 
     isSearch = (flags&(WHERE_BTM_LIMIT|WHERE_TOP_LIMIT))!=0
             || ((flags&WHERE_VIRTUALTABLE)==0 && (pLoop->u.btree.nEq>0))
@@ -158554,7 +158601,7 @@ SQLITE_PRIVATE int sqlite3WhereExplainOneScan(
         zFmt = "AUTOMATIC PARTIAL COVERING INDEX";
       }else if( flags & WHERE_AUTO_INDEX ){
         zFmt = "AUTOMATIC COVERING INDEX";
-      }else if( flags & WHERE_IDX_ONLY ){
+      }else if( flags & (WHERE_IDX_ONLY|WHERE_EXPRIDX) ){
         zFmt = "COVERING INDEX %s";
       }else{
         zFmt = "INDEX %s";
@@ -158606,11 +158653,50 @@ SQLITE_PRIVATE int sqlite3WhereExplainOneScan(
       sqlite3_str_append(&str, " (~1 row)", 9);
     }
 #endif
+#if defined(SQLITE_DEBUG) && !defined(SQLITE_OMIT_EXPLAIN)
     zMsg = sqlite3StrAccumFinish(&str);
     sqlite3ExplainBreakpoint("",zMsg);
-    ret = sqlite3VdbeAddOp4(v, OP_Explain, sqlite3VdbeCurrentAddr(v),
-                            pParse->addrExplain, pLoop->rRun,
-                            zMsg, P4_DYNAMIC);
+#endif
+
+    assert( pOp->opcode==OP_Explain );
+    assert( pOp->p4type==P4_DYNAMIC || pOp->p4.z==0 );
+    sqlite3DbFree(db, pOp->p4.z);
+    pOp->p4type = P4_DYNAMIC;
+    pOp->p4.z = sqlite3StrAccumFinish(&str);
+  }
+}
+
+
+/*
+** This function is a no-op unless currently processing an EXPLAIN QUERY PLAN
+** command, or if stmt_scanstatus_v2() stats are enabled, or if SQLITE_DEBUG
+** was defined at compile-time. If it is not a no-op, a single OP_Explain
+** opcode is added to the output to describe the table scan strategy in pLevel.
+**
+** If an OP_Explain opcode is added to the VM, its address is returned.
+** Otherwise, if no OP_Explain is coded, zero is returned.
+*/
+SQLITE_PRIVATE int sqlite3WhereExplainOneScan(
+  Parse *pParse,                  /* Parse context */
+  SrcList *pTabList,              /* Table list this loop refers to */
+  WhereLevel *pLevel,             /* Scan to write OP_Explain opcode for */
+  u16 wctrlFlags                  /* Flags passed to sqlite3WhereBegin() */
+){
+  int ret = 0;
+#if !defined(SQLITE_DEBUG)
+  if( sqlite3ParseToplevel(pParse)->explain==2 || IS_STMT_SCANSTATUS(pParse->db) )
+#endif
+  {
+    if( (pLevel->pWLoop->wsFlags & WHERE_MULTI_OR)==0
+     && (wctrlFlags & WHERE_OR_SUBCLAUSE)==0
+    ){
+      Vdbe *v = pParse->pVdbe;
+      int addr = sqlite3VdbeCurrentAddr(v);
+      ret = sqlite3VdbeAddOp3(
+          v, OP_Explain, addr, pParse->addrExplain, pLevel->pWLoop->rRun
+      );
+      sqlite3WhereAddExplainText(pParse, addr, pTabList, pLevel, wctrlFlags);
+    }
   }
   return ret;
 }
@@ -158709,9 +158795,10 @@ SQLITE_PRIVATE void sqlite3WhereAddScanStatus(
       }
     }else{
       int addr;
+      VdbeOp *pOp;
       assert( pSrclist->a[pLvl->iFrom].fg.isSubquery );
       addr = pSrclist->a[pLvl->iFrom].u4.pSubq->addrFillSub;
-      VdbeOp *pOp = sqlite3VdbeGetOp(v, addr-1);
+      pOp = sqlite3VdbeGetOp(v, addr-1);
       assert( sqlite3VdbeDb(v)->mallocFailed || pOp->opcode==OP_InitCoroutine );
       assert( sqlite3VdbeDb(v)->mallocFailed || pOp->p2>addr );
       sqlite3VdbeScanStatusRange(v, addrExplain, addr, pOp->p2-1);
@@ -164037,7 +164124,7 @@ static int constraintCompatibleWithOuterJoin(
     return 0;
   }
   if( (pSrc->fg.jointype & (JT_LEFT|JT_RIGHT))!=0
-   && ExprHasProperty(pTerm->pExpr, EP_InnerON)
+   && NEVER(ExprHasProperty(pTerm->pExpr, EP_InnerON))
   ){
     return 0;
   }
@@ -164058,6 +164145,11 @@ static int constraintCompatibleWithOuterJoin(
 **        more than 20, then return false.
 **
 **   3.   If no disqualifying conditions above are found, return true.
+**
+** 2025-01-03: I experimented with a new rule that returns false if the
+** the datatype of the column is "BOOLEAN". This did not improve
+** performance on any queries at hand, but it did burn CPU cycles, so the
+** idea was not committed.
 */
 static SQLITE_NOINLINE int columnIsGoodIndexCandidate(
   const Table *pTab,
@@ -165530,7 +165622,7 @@ static int whereInScanEst(
 #endif /* SQLITE_ENABLE_STAT4 */
 
 
-#ifdef WHERETRACE_ENABLED
+#if defined(WHERETRACE_ENABLED) || defined(SQLITE_DEBUG)
 /*
 ** Print the content of a WhereTerm object
 */
@@ -165573,6 +165665,9 @@ SQLITE_PRIVATE void sqlite3WhereTermPrint(WhereTerm *pTerm, int iTerm){
     sqlite3DebugPrintf("\n");
     sqlite3TreeViewExpr(0, pTerm->pExpr, 0);
   }
+}
+SQLITE_PRIVATE void sqlite3ShowWhereTerm(WhereTerm *pTerm){
+  sqlite3WhereTermPrint(pTerm, 0);
 }
 #endif
 
@@ -166759,7 +166854,6 @@ static int whereUsablePartialIndex(
     if( !whereUsablePartialIndex(iTab,jointype,pWC,pWhere->pLeft) ) return 0;
     pWhere = pWhere->pRight;
   }
-  if( pParse->db->flags & SQLITE_EnableQPSG ) pParse = 0;
   for(i=0, pTerm=pWC->a; i<pWC->nTerm; i++, pTerm++){
     Expr *pExpr;
     pExpr = pTerm->pExpr;
@@ -169420,7 +169514,7 @@ static SQLITE_NOINLINE Bitmask whereOmitNoopJoin(
       }
       if( hasRightJoin
        && ExprHasProperty(pTerm->pExpr, EP_InnerON)
-       && pTerm->pExpr->w.iJoin==pItem->iCursor
+       && NEVER(pTerm->pExpr->w.iJoin==pItem->iCursor)
       ){
         break;  /* restriction (5) */
       }
@@ -170340,6 +170434,7 @@ whereBeginError:
   ){
     if( (db->flags & SQLITE_VdbeAddopTrace)==0 ) return;
     sqlite3VdbePrintOp(0, pc, pOp);
+    sqlite3ShowWhereTerm(0); /* So compiler won't complain about unused func */
   }
 #endif
 
@@ -170639,14 +170734,28 @@ SQLITE_PRIVATE void sqlite3WhereEnd(WhereInfo *pWInfo){
             pOp->p2 = x;
             pOp->p1 = pLevel->iIdxCur;
             OpcodeRewriteTrace(db, k, pOp);
-          }else{
-            /* Unable to translate the table reference into an index
-            ** reference.  Verify that this is harmless - that the
-            ** table being referenced really is open.
-            */
+          }else if( pLoop->wsFlags & (WHERE_IDX_ONLY|WHERE_EXPRIDX) ){
             if( pLoop->wsFlags & WHERE_IDX_ONLY ){
+              /* An error. pLoop is supposed to be a covering index loop,
+              ** and yet the VM code refers to a column of the table that
+              ** is not part of the index.  */
               sqlite3ErrorMsg(pParse, "internal query planner error");
               pParse->rc = SQLITE_INTERNAL;
+            }else{
+              /* The WHERE_EXPRIDX flag is set by the planner when it is likely
+              ** that pLoop is a covering index loop, but it is not possible
+              ** to be 100% sure. In this case, any OP_Explain opcode
+              ** corresponding to this loop describes the index as a "COVERING
+              ** INDEX". But, pOp proves that pLoop is not actually a covering
+              ** index loop. So clear the WHERE_EXPRIDX flag and rewrite the
+              ** text that accompanies the OP_Explain opcode, if any.  */
+              pLoop->wsFlags &= ~WHERE_EXPRIDX;
+              sqlite3WhereAddExplainText(pParse,
+                  pLevel->addrBody-1,
+                  pTabList,
+                  pLevel,
+                  pWInfo->wctrlFlags
+              );
             }
           }
         }else if( pOp->opcode==OP_Rowid ){
@@ -172354,6 +172463,7 @@ static void windowAggStep(
     int regArg;
     int nArg = pWin->bExprArgs ? 0 : windowArgCount(pWin);
     int i;
+    int addrIf = 0;
 
     assert( bInverse==0 || pWin->eStart!=TK_UNBOUNDED );
 
@@ -172369,6 +172479,18 @@ static void windowAggStep(
       }
     }
     regArg = reg;
+
+    if( pWin->pFilter ){
+      int regTmp;
+      assert( ExprUseXList(pWin->pOwner) );
+      assert( pWin->bExprArgs || !nArg ||nArg==pWin->pOwner->x.pList->nExpr );
+      assert( pWin->bExprArgs || nArg  ||pWin->pOwner->x.pList==0 );
+      regTmp = sqlite3GetTempReg(pParse);
+      sqlite3VdbeAddOp3(v, OP_Column, csr, pWin->iArgCol+nArg,regTmp);
+      addrIf = sqlite3VdbeAddOp3(v, OP_IfNot, regTmp, 0, 1);
+      VdbeCoverage(v);
+      sqlite3ReleaseTempReg(pParse, regTmp);
+    }
 
     if( pMWin->regStartRowid==0
      && (pFunc->funcFlags & SQLITE_FUNC_MINMAX)
@@ -172389,25 +172511,13 @@ static void windowAggStep(
       }
       sqlite3VdbeJumpHere(v, addrIsNull);
     }else if( pWin->regApp ){
+      assert( pWin->pFilter==0 );
       assert( pFunc->zName==nth_valueName
            || pFunc->zName==first_valueName
       );
       assert( bInverse==0 || bInverse==1 );
       sqlite3VdbeAddOp2(v, OP_AddImm, pWin->regApp+1-bInverse, 1);
     }else if( pFunc->xSFunc!=noopStepFunc ){
-      int addrIf = 0;
-      if( pWin->pFilter ){
-        int regTmp;
-        assert( ExprUseXList(pWin->pOwner) );
-        assert( pWin->bExprArgs || !nArg ||nArg==pWin->pOwner->x.pList->nExpr );
-        assert( pWin->bExprArgs || nArg  ||pWin->pOwner->x.pList==0 );
-        regTmp = sqlite3GetTempReg(pParse);
-        sqlite3VdbeAddOp3(v, OP_Column, csr, pWin->iArgCol+nArg,regTmp);
-        addrIf = sqlite3VdbeAddOp3(v, OP_IfNot, regTmp, 0, 1);
-        VdbeCoverage(v);
-        sqlite3ReleaseTempReg(pParse, regTmp);
-      }
-
       if( pWin->bExprArgs ){
         int iOp = sqlite3VdbeCurrentAddr(v);
         int iEnd;
@@ -172434,12 +172544,13 @@ static void windowAggStep(
       sqlite3VdbeAddOp3(v, bInverse? OP_AggInverse : OP_AggStep,
                         bInverse, regArg, pWin->regAccum);
       sqlite3VdbeAppendP4(v, pFunc, P4_FUNCDEF);
-      sqlite3VdbeChangeP5(v, (u8)nArg);
+      sqlite3VdbeChangeP5(v, (u16)nArg);
       if( pWin->bExprArgs ){
         sqlite3ReleaseTempRange(pParse, regArg, nArg);
       }
-      if( addrIf ) sqlite3VdbeJumpHere(v, addrIf);
     }
+
+    if( addrIf ) sqlite3VdbeJumpHere(v, addrIf);
   }
 }
 
@@ -173792,9 +173903,7 @@ SQLITE_PRIVATE void sqlite3WindowCodeStep(
 /************** End of window.c **********************************************/
 /************** Begin file parse.c *******************************************/
 /* This file is automatically generated by Lemon from input grammar
-** source file "parse.y" with these options:
-**
-**   -DSQLITE_ENABLE_UPDATE_DELETE_LIMIT
+** source file "parse.y".
 */
 /*
 ** 2001-09-15
@@ -173867,6 +173976,13 @@ SQLITE_PRIVATE void sqlite3WindowCodeStep(
 struct TrigEvent { int a; IdList * b; };
 
 struct FrameBound     { int eType; Expr *pExpr; };
+
+/*
+** Generate a syntax error
+*/
+static void parserSyntaxError(Parse *pParse, Token *p){
+  sqlite3ErrorMsg(pParse, "near \"%T\": syntax error", p);
+}
 
 /*
 ** Disable lookaside memory allocation for objects that might be
@@ -174323,18 +174439,18 @@ typedef union {
 #define sqlite3ParserCTX_FETCH Parse *pParse=yypParser->pParse;
 #define sqlite3ParserCTX_STORE yypParser->pParse=pParse;
 #define YYFALLBACK 1
-#define YYNSTATE             587
+#define YYNSTATE             583
 #define YYNRULE              409
 #define YYNRULE_WITH_ACTION  344
 #define YYNTOKEN             186
-#define YY_MAX_SHIFT         586
-#define YY_MIN_SHIFTREDUCE   849
-#define YY_MAX_SHIFTREDUCE   1257
-#define YY_ERROR_ACTION      1258
-#define YY_ACCEPT_ACTION     1259
-#define YY_NO_ACTION         1260
-#define YY_MIN_REDUCE        1261
-#define YY_MAX_REDUCE        1669
+#define YY_MAX_SHIFT         582
+#define YY_MIN_SHIFTREDUCE   845
+#define YY_MAX_SHIFTREDUCE   1253
+#define YY_ERROR_ACTION      1254
+#define YY_ACCEPT_ACTION     1255
+#define YY_NO_ACTION         1256
+#define YY_MIN_REDUCE        1257
+#define YY_MAX_REDUCE        1665
 #define YY_MIN_DSTRCTR       205
 #define YY_MAX_DSTRCTR       319
 /************* End control #defines *******************************************/
@@ -174421,227 +174537,227 @@ typedef union {
 *********** Begin parsing tables **********************************************/
 #define YY_ACTTAB_COUNT (2207)
 static const YYACTIONTYPE yy_action[] = {
- /*     0 */   130,  127,  234,  282,  282, 1332,  580, 1311,  464,  289,
- /*    10 */   289,  580, 1626,  385,  580, 1332,  577,  580,  566,  417,
- /*    20 */  1304, 1546,  577,  485,  566,  528,  464,  463,  562,   82,
- /*    30 */    82,  987,  294,  379,   51,   51,  502,   61,   61,  988,
- /*    40 */    82,   82, 1581,  137,  138,   91,    7, 1232, 1232, 1067,
- /*    50 */  1070, 1057, 1057,  135,  135,  136,  136,  136,  136,  417,
- /*    60 */   288,  288,  182,  288,  288,  485,  540,  288,  288,  130,
- /*    70 */   127,  234,  436,  577,  529,  566,  577,  561,  566, 1294,
- /*    80 */   577,  425,  566,  137,  138,   91,  563, 1232, 1232, 1067,
- /*    90 */  1070, 1057, 1057,  135,  135,  136,  136,  136,  136,  296,
- /*   100 */   464,  402, 1253,  134,  134,  134,  134,  133,  133,  132,
- /*   110 */   132,  132,  131,  128,  455,   44, 1054, 1054, 1068, 1071,
- /*   120 */  1259,    1,    1,  586,    2, 1263,  585, 1178, 1263, 1178,
- /*   130 */   321,  417,  155,  321, 1588,  155,  383,  112,  502, 1345,
- /*   140 */   460,  299, 1345,  134,  134,  134,  134,  133,  133,  132,
- /*   150 */   132,  132,  131,  128,  455,  137,  138,   91, 1109, 1232,
- /*   160 */  1232, 1067, 1070, 1057, 1057,  135,  135,  136,  136,  136,
- /*   170 */   136, 1208,  320,  571,  288,  288,  283,  288,  288,  527,
- /*   180 */   527, 1254,  139, 1545,    7,  214,  507,  577, 1173,  566,
- /*   190 */   577, 1058,  566,  136,  136,  136,  136,  129,  405,  551,
- /*   200 */   491, 1173,  245, 1572, 1173,  245,  133,  133,  132,  132,
- /*   210 */   132,  131,  128,  455,  261,  134,  134,  134,  134,  133,
- /*   220 */   133,  132,  132,  132,  131,  128,  455,  455, 1208, 1209,
- /*   230 */  1208,  130,  127,  234,  459,  417,  182,  459,  130,  127,
+ /*     0 */   130,  127,  234,  282,  282, 1328,  576, 1307,  460,  289,
+ /*    10 */   289,  576, 1622,  381,  576, 1328,  573,  576,  562,  413,
+ /*    20 */  1300, 1542,  573,  481,  562,  524,  460,  459,  558,   82,
+ /*    30 */    82,  983,  294,  375,   51,   51,  498,   61,   61,  984,
+ /*    40 */    82,   82, 1577,  137,  138,   91,    7, 1228, 1228, 1063,
+ /*    50 */  1066, 1053, 1053,  135,  135,  136,  136,  136,  136,  413,
+ /*    60 */   288,  288,  182,  288,  288,  481,  536,  288,  288,  130,
+ /*    70 */   127,  234,  432,  573,  525,  562,  573,  557,  562, 1290,
+ /*    80 */   573,  421,  562,  137,  138,   91,  559, 1228, 1228, 1063,
+ /*    90 */  1066, 1053, 1053,  135,  135,  136,  136,  136,  136,  296,
+ /*   100 */   460,  398, 1249,  134,  134,  134,  134,  133,  133,  132,
+ /*   110 */   132,  132,  131,  128,  451,   44, 1050, 1050, 1064, 1067,
+ /*   120 */  1255,    1,    1,  582,    2, 1259,  581, 1174, 1259, 1174,
+ /*   130 */   321,  413,  155,  321, 1584,  155,  379,  112,  498, 1341,
+ /*   140 */   456,  299, 1341,  134,  134,  134,  134,  133,  133,  132,
+ /*   150 */   132,  132,  131,  128,  451,  137,  138,   91, 1105, 1228,
+ /*   160 */  1228, 1063, 1066, 1053, 1053,  135,  135,  136,  136,  136,
+ /*   170 */   136, 1204,  320,  567,  288,  288,  283,  288,  288,  523,
+ /*   180 */   523, 1250,  139, 1541,    7,  214,  503,  573, 1169,  562,
+ /*   190 */   573, 1054,  562,  136,  136,  136,  136,  129,  401,  547,
+ /*   200 */   487, 1169,  245, 1568, 1169,  245,  133,  133,  132,  132,
+ /*   210 */   132,  131,  128,  451,  261,  134,  134,  134,  134,  133,
+ /*   220 */   133,  132,  132,  132,  131,  128,  451,  451, 1204, 1205,
+ /*   230 */  1204,  130,  127,  234,  455,  413,  182,  455,  130,  127,
  /*   240 */   234,  134,  134,  134,  134,  133,  133,  132,  132,  132,
- /*   250 */   131,  128,  455,  136,  136,  136,  136,  542,  580,  137,
- /*   260 */   138,   91,  261, 1232, 1232, 1067, 1070, 1057, 1057,  135,
- /*   270 */   135,  136,  136,  136,  136,   44,  476,  350, 1208,  476,
- /*   280 */   350,   51,   51,  422,   93,  157,  134,  134,  134,  134,
- /*   290 */   133,  133,  132,  132,  132,  131,  128,  455,  166,  367,
+ /*   250 */   131,  128,  451,  136,  136,  136,  136,  538,  576,  137,
+ /*   260 */   138,   91,  261, 1228, 1228, 1063, 1066, 1053, 1053,  135,
+ /*   270 */   135,  136,  136,  136,  136,   44,  472,  346, 1204,  472,
+ /*   280 */   346,   51,   51,  418,   93,  157,  134,  134,  134,  134,
+ /*   290 */   133,  133,  132,  132,  132,  131,  128,  451,  166,  363,
  /*   300 */   298,  134,  134,  134,  134,  133,  133,  132,  132,  132,
- /*   310 */   131,  128,  455, 1297,  465, 1574,  427,  381,  275,  134,
+ /*   310 */   131,  128,  451, 1293,  461, 1570,  423,  377,  275,  134,
  /*   320 */   134,  134,  134,  133,  133,  132,  132,  132,  131,  128,
- /*   330 */   455,  422,  320,  571, 1296, 1208, 1209, 1208,  257,  417,
- /*   340 */   487,  515,  512,  511,   94,  132,  132,  132,  131,  128,
- /*   350 */   455,  510, 1208,  552,  552,  392,  580,  388,    7,  417,
- /*   360 */   554,  229,  526,  137,  138,   91,  534, 1232, 1232, 1067,
- /*   370 */  1070, 1057, 1057,  135,  135,  136,  136,  136,  136,   51,
- /*   380 */    51, 1586,  384,  137,  138,   91,  331, 1232, 1232, 1067,
- /*   390 */  1070, 1057, 1057,  135,  135,  136,  136,  136,  136,  320,
- /*   400 */   571,  288,  288,  320,  571, 1606,  586,    2, 1263, 1208,
- /*   410 */  1209, 1208, 1632,  321,  577,  155,  566,  580, 1515,  264,
- /*   420 */   231,  524, 1345,  134,  134,  134,  134,  133,  133,  132,
- /*   430 */   132,  132,  131,  128,  455,  523, 1515, 1517, 1337, 1337,
- /*   440 */    82,   82,  502,  134,  134,  134,  134,  133,  133,  132,
- /*   450 */   132,  132,  131,  128,  455, 1439,  257,  288,  288,  515,
- /*   460 */   512,  511,  948, 1572,  417, 1023, 1208,  947,  364,  510,
- /*   470 */   577, 1602,  566,   44,  579,  555,  555,  561, 1111, 1586,
- /*   480 */   548,  580, 1111,   40,  421,  245,  535, 1509,  137,  138,
- /*   490 */    91,  219, 1232, 1232, 1067, 1070, 1057, 1057,  135,  135,
- /*   500 */   136,  136,  136,  136,   81,   81, 1285, 1208,  417,  557,
- /*   510 */  1515,   48,  516,  452,  451,  497,  582,  459,  582,  348,
- /*   520 */    45, 1208, 1237, 1208, 1209, 1208,  432, 1239,  158,  886,
- /*   530 */   320,  571,  137,  138,   91, 1238, 1232, 1232, 1067, 1070,
- /*   540 */  1057, 1057,  135,  135,  136,  136,  136,  136,  134,  134,
- /*   550 */   134,  134,  133,  133,  132,  132,  132,  131,  128,  455,
- /*   560 */  1240,  580, 1240,  329, 1208, 1209, 1208,  391,  496,  407,
- /*   570 */  1044,  386,  493,  123,  572, 1573,    4,  381, 1208, 1209,
- /*   580 */  1208,  574,  574,  574,   82,   82,  886, 1033, 1335, 1335,
- /*   590 */   575, 1032,  134,  134,  134,  134,  133,  133,  132,  132,
- /*   600 */   132,  131,  128,  455,  288,  288, 1285, 1208,  580,  427,
- /*   610 */   580, 1572,  417,  427,  456,  382,  890,  577, 1283,  566,
- /*   620 */    46,  561,  536, 1032, 1032, 1034,  569,  130,  127,  234,
- /*   630 */   560,   82,   82,   82,   82,  483,  137,  138,   91,  466,
- /*   640 */  1232, 1232, 1067, 1070, 1057, 1057,  135,  135,  136,  136,
- /*   650 */   136,  136, 1192,  491, 1510, 1044,  417,    6, 1208,   50,
- /*   660 */   883,  121,  121,  952, 1208, 1209, 1208,  362,  561,  122,
- /*   670 */   316,  456,  581,  456,  539, 1208, 1032,  443,  303,  212,
- /*   680 */   137,  138,   91,  213, 1232, 1232, 1067, 1070, 1057, 1057,
+ /*   330 */   451,  418,  320,  567, 1292, 1204, 1205, 1204,  257,  413,
+ /*   340 */   483,  511,  508,  507,   94,  132,  132,  132,  131,  128,
+ /*   350 */   451,  506, 1204,  548,  548,  388,  576,  384,    7,  413,
+ /*   360 */   550,  229,  522,  137,  138,   91,  530, 1228, 1228, 1063,
+ /*   370 */  1066, 1053, 1053,  135,  135,  136,  136,  136,  136,   51,
+ /*   380 */    51, 1582,  380,  137,  138,   91,  331, 1228, 1228, 1063,
+ /*   390 */  1066, 1053, 1053,  135,  135,  136,  136,  136,  136,  320,
+ /*   400 */   567,  288,  288,  320,  567, 1602,  582,    2, 1259, 1204,
+ /*   410 */  1205, 1204, 1628,  321,  573,  155,  562,  576, 1511,  264,
+ /*   420 */   231,  520, 1341,  134,  134,  134,  134,  133,  133,  132,
+ /*   430 */   132,  132,  131,  128,  451,  519, 1511, 1513, 1333, 1333,
+ /*   440 */    82,   82,  498,  134,  134,  134,  134,  133,  133,  132,
+ /*   450 */   132,  132,  131,  128,  451, 1435,  257,  288,  288,  511,
+ /*   460 */   508,  507,  944, 1568,  413, 1019, 1204,  943,  360,  506,
+ /*   470 */   573, 1598,  562,   44,  575,  551,  551,  557, 1107, 1582,
+ /*   480 */   544,  576, 1107,   40,  417,  245,  531, 1505,  137,  138,
+ /*   490 */    91,  219, 1228, 1228, 1063, 1066, 1053, 1053,  135,  135,
+ /*   500 */   136,  136,  136,  136,   81,   81, 1281, 1204,  413,  553,
+ /*   510 */  1511,   48,  512,  448,  447,  493,  578,  455,  578,  344,
+ /*   520 */    45, 1204, 1233, 1204, 1205, 1204,  428, 1235,  158,  882,
+ /*   530 */   320,  567,  137,  138,   91, 1234, 1228, 1228, 1063, 1066,
+ /*   540 */  1053, 1053,  135,  135,  136,  136,  136,  136,  134,  134,
+ /*   550 */   134,  134,  133,  133,  132,  132,  132,  131,  128,  451,
+ /*   560 */  1236,  576, 1236,  329, 1204, 1205, 1204,  387,  492,  403,
+ /*   570 */  1040,  382,  489,  123,  568, 1569,    4,  377, 1204, 1205,
+ /*   580 */  1204,  570,  570,  570,   82,   82,  882, 1029, 1331, 1331,
+ /*   590 */   571, 1028,  134,  134,  134,  134,  133,  133,  132,  132,
+ /*   600 */   132,  131,  128,  451,  288,  288, 1281, 1204,  576,  423,
+ /*   610 */   576, 1568,  413,  423,  452,  378,  886,  573, 1279,  562,
+ /*   620 */    46,  557,  532, 1028, 1028, 1030,  565,  130,  127,  234,
+ /*   630 */   556,   82,   82,   82,   82,  479,  137,  138,   91,  462,
+ /*   640 */  1228, 1228, 1063, 1066, 1053, 1053,  135,  135,  136,  136,
+ /*   650 */   136,  136, 1188,  487, 1506, 1040,  413,    6, 1204,   50,
+ /*   660 */   879,  121,  121,  948, 1204, 1205, 1204,  358,  557,  122,
+ /*   670 */   316,  452,  577,  452,  535, 1204, 1028,  439,  303,  212,
+ /*   680 */   137,  138,   91,  213, 1228, 1228, 1063, 1066, 1053, 1053,
  /*   690 */   135,  135,  136,  136,  136,  136,  134,  134,  134,  134,
- /*   700 */   133,  133,  132,  132,  132,  131,  128,  455, 1032, 1032,
- /*   710 */  1034, 1035,   35,  288,  288, 1208, 1209, 1208, 1044, 1343,
- /*   720 */   537,  123,  572, 1573,    4,  381,  577, 1023,  566,  357,
- /*   730 */  1281,  360, 1208, 1209, 1208, 1033,  492, 1192,  575, 1032,
+ /*   700 */   133,  133,  132,  132,  132,  131,  128,  451, 1028, 1028,
+ /*   710 */  1030, 1031,   35,  288,  288, 1204, 1205, 1204, 1040, 1339,
+ /*   720 */   533,  123,  568, 1569,    4,  377,  573, 1019,  562,  353,
+ /*   730 */  1277,  356, 1204, 1205, 1204, 1029,  488, 1188,  571, 1028,
  /*   740 */   134,  134,  134,  134,  133,  133,  132,  132,  132,  131,
- /*   750 */   128,  455,  580,  347,  288,  288,  453,  453,  453,  975,
- /*   760 */   417, 1631,  456,  915, 1191,  288,  288,  577,  468,  566,
- /*   770 */   238, 1032, 1032, 1034,  569,   82,   82,  502,  577,  415,
- /*   780 */   566,  348,  471,  334,  137,  138,   91,  197, 1232, 1232,
- /*   790 */  1067, 1070, 1057, 1057,  135,  135,  136,  136,  136,  136,
- /*   800 */  1192,  532, 1173, 1044,  417, 1114, 1114,  499, 1045,  121,
- /*   810 */   121, 1208,  317,  544,  866, 1173, 1248,  122, 1173,  456,
- /*   820 */   581,  456, 1344,  198, 1032, 1208,  485,  530,  137,  138,
- /*   830 */    91,  564, 1232, 1232, 1067, 1070, 1057, 1057,  135,  135,
+ /*   750 */   128,  451,  576,  343,  288,  288,  449,  449,  449,  971,
+ /*   760 */   413, 1627,  452,  911, 1187,  288,  288,  573,  464,  562,
+ /*   770 */   238, 1028, 1028, 1030,  565,   82,   82,  498,  573,  411,
+ /*   780 */   562,  344,  467,  332,  137,  138,   91,  197, 1228, 1228,
+ /*   790 */  1063, 1066, 1053, 1053,  135,  135,  136,  136,  136,  136,
+ /*   800 */  1188,  528, 1169, 1040,  413, 1110, 1110,  495, 1041,  121,
+ /*   810 */   121, 1204,  317,  540,  862, 1169, 1244,  122, 1169,  452,
+ /*   820 */   577,  452, 1340,  198, 1028, 1204,  481,  526,  137,  138,
+ /*   830 */    91,  560, 1228, 1228, 1063, 1066, 1053, 1053,  135,  135,
  /*   840 */   136,  136,  136,  136,  134,  134,  134,  134,  133,  133,
- /*   850 */   132,  132,  132,  131,  128,  455, 1032, 1032, 1034, 1035,
- /*   860 */    35, 1208,  288,  288, 1208,  481,  288,  288, 1208, 1209,
- /*   870 */  1208,  543,  485,  441,  474,  577, 1455,  566,  368,  577,
- /*   880 */  1157,  566, 1208, 1209, 1208, 1192,    5,  580,  134,  134,
- /*   890 */   134,  134,  133,  133,  132,  132,  132,  131,  128,  455,
- /*   900 */   221,  214,  302,   96, 1153, 1661,  232, 1661,  417,  396,
- /*   910 */    19,   19, 1028,  953,  410,  377, 1599, 1089, 1208, 1209,
- /*   920 */  1208, 1208, 1209, 1208, 1208,  430, 1153, 1662,  417, 1662,
- /*   930 */  1663,  403,  137,  138,   91,    3, 1232, 1232, 1067, 1070,
- /*   940 */  1057, 1057,  135,  135,  136,  136,  136,  136,  304, 1315,
- /*   950 */   518, 1208,  137,  138,   91, 1502, 1232, 1232, 1067, 1070,
- /*   960 */  1057, 1057,  135,  135,  136,  136,  136,  136,  438,  131,
- /*   970 */   128,  455,  379, 1208,  274,  291,  376,  521,  371,  520,
- /*   980 */   262, 1208, 1209, 1208, 1151,  227,  367,  452,  451, 1439,
- /*   990 */  1572, 1314,  134,  134,  134,  134,  133,  133,  132,  132,
- /*  1000 */   132,  131,  128,  455, 1572,  580, 1151,  491, 1208, 1209,
- /*  1010 */  1208,  446,  134,  134,  134,  134,  133,  133,  132,  132,
- /*  1020 */   132,  131,  128,  455,  390,  580,  489,  580,   19,   19,
- /*  1030 */  1208, 1209, 1208, 1349, 1240,  974, 1240,  578,   47,  940,
- /*  1040 */   940,  477,  417,  435, 1556,  577, 1129,  566,   19,   19,
- /*  1050 */    19,   19,   49,  340,  854,  855,  856,  111, 1372,  315,
- /*  1060 */   433,  580,  417,  437,  345,  306,  137,  138,   91,  115,
- /*  1070 */  1232, 1232, 1067, 1070, 1057, 1057,  135,  135,  136,  136,
- /*  1080 */   136,  136,  580, 1313,   82,   82,  137,  138,   91,  533,
- /*  1090 */  1232, 1232, 1067, 1070, 1057, 1057,  135,  135,  136,  136,
- /*  1100 */   136,  136, 1573,  222,  381,   19,   19,  305, 1130, 1173,
- /*  1110 */   402, 1152,   22,   22,  502,  337, 1573,  339,  381,  580,
- /*  1120 */   442,  449, 1173, 1131,  490, 1173,  134,  134,  134,  134,
- /*  1130 */   133,  133,  132,  132,  132,  131,  128,  455, 1132,  580,
- /*  1140 */   906,  580,  145,  145,    6,  580,  134,  134,  134,  134,
- /*  1150 */   133,  133,  132,  132,  132,  131,  128,  455,  214, 1340,
- /*  1160 */   926,  580,   19,   19,   19,   19, 1286,  423,   19,   19,
- /*  1170 */   927,  416,  519,  141,  580, 1173,  417,  206,  469,  207,
- /*  1180 */   907,  215, 1579,  556,  147,  147,    7,  227, 1173,  415,
- /*  1190 */  1254, 1173,  120,  307,  117,  307,  417,   66,   66,  338,
- /*  1200 */   137,  138,   91,  119, 1232, 1232, 1067, 1070, 1057, 1057,
- /*  1210 */   135,  135,  136,  136,  136,  136,  417,  285,  209,  973,
- /*  1220 */   137,  138,   91,  475, 1232, 1232, 1067, 1070, 1057, 1057,
- /*  1230 */   135,  135,  136,  136,  136,  136,  439,   10, 1454,  267,
- /*  1240 */   137,  126,   91, 1439, 1232, 1232, 1067, 1070, 1057, 1057,
- /*  1250 */   135,  135,  136,  136,  136,  136, 1439, 1439,  414,  413,
+ /*   850 */   132,  132,  132,  131,  128,  451, 1028, 1028, 1030, 1031,
+ /*   860 */    35, 1204,  288,  288, 1204,  477,  288,  288, 1204, 1205,
+ /*   870 */  1204,  539,  481,  437,  470,  573, 1451,  562,  364,  573,
+ /*   880 */  1153,  562, 1204, 1205, 1204, 1188,    5,  576,  134,  134,
+ /*   890 */   134,  134,  133,  133,  132,  132,  132,  131,  128,  451,
+ /*   900 */   221,  214,  302,   96, 1149, 1657,  232, 1657,  413,  392,
+ /*   910 */    19,   19, 1024,  949,  406,  373, 1595, 1085, 1204, 1205,
+ /*   920 */  1204, 1204, 1205, 1204, 1204,  426, 1149, 1658,  413, 1658,
+ /*   930 */  1659,  399,  137,  138,   91,    3, 1228, 1228, 1063, 1066,
+ /*   940 */  1053, 1053,  135,  135,  136,  136,  136,  136,  304, 1311,
+ /*   950 */   514, 1204,  137,  138,   91, 1498, 1228, 1228, 1063, 1066,
+ /*   960 */  1053, 1053,  135,  135,  136,  136,  136,  136,  434,  131,
+ /*   970 */   128,  451,  375, 1204,  274,  291,  372,  517,  367,  516,
+ /*   980 */   262, 1204, 1205, 1204, 1147,  227,  363,  448,  447, 1435,
+ /*   990 */  1568, 1310,  134,  134,  134,  134,  133,  133,  132,  132,
+ /*  1000 */   132,  131,  128,  451, 1568,  576, 1147,  487, 1204, 1205,
+ /*  1010 */  1204,  442,  134,  134,  134,  134,  133,  133,  132,  132,
+ /*  1020 */   132,  131,  128,  451,  386,  576,  485,  576,   19,   19,
+ /*  1030 */  1204, 1205, 1204, 1345, 1236,  970, 1236,  574,   47,  936,
+ /*  1040 */   936,  473,  413,  431, 1552,  573, 1125,  562,   19,   19,
+ /*  1050 */    19,   19,   49,  336,  850,  851,  852,  111, 1368,  315,
+ /*  1060 */   429,  576,  413,  433,  341,  306,  137,  138,   91,  115,
+ /*  1070 */  1228, 1228, 1063, 1066, 1053, 1053,  135,  135,  136,  136,
+ /*  1080 */   136,  136,  576, 1309,   82,   82,  137,  138,   91,  529,
+ /*  1090 */  1228, 1228, 1063, 1066, 1053, 1053,  135,  135,  136,  136,
+ /*  1100 */   136,  136, 1569,  222,  377,   19,   19,  305, 1126, 1169,
+ /*  1110 */   398, 1148,   22,   22,  498,  333, 1569,  335,  377,  576,
+ /*  1120 */   438,  445, 1169, 1127,  486, 1169,  134,  134,  134,  134,
+ /*  1130 */   133,  133,  132,  132,  132,  131,  128,  451, 1128,  576,
+ /*  1140 */   902,  576,  145,  145,    6,  576,  134,  134,  134,  134,
+ /*  1150 */   133,  133,  132,  132,  132,  131,  128,  451,  214, 1336,
+ /*  1160 */   922,  576,   19,   19,   19,   19, 1282,  419,   19,   19,
+ /*  1170 */   923,  412,  515,  141,  576, 1169,  413,  206,  465,  207,
+ /*  1180 */   903,  215, 1575,  552,  147,  147,    7,  227, 1169,  411,
+ /*  1190 */  1250, 1169,  120,  307,  117,  307,  413,   66,   66,  334,
+ /*  1200 */   137,  138,   91,  119, 1228, 1228, 1063, 1066, 1053, 1053,
+ /*  1210 */   135,  135,  136,  136,  136,  136,  413,  285,  209,  969,
+ /*  1220 */   137,  138,   91,  471, 1228, 1228, 1063, 1066, 1053, 1053,
+ /*  1230 */   135,  135,  136,  136,  136,  136,  435,   10, 1450,  267,
+ /*  1240 */   137,  126,   91, 1435, 1228, 1228, 1063, 1066, 1053, 1053,
+ /*  1250 */   135,  135,  136,  136,  136,  136, 1435, 1435,  410,  409,
  /*  1260 */   134,  134,  134,  134,  133,  133,  132,  132,  132,  131,
- /*  1270 */   128,  455,  580,  973,  580, 1228,  502,  377, 1599, 1558,
+ /*  1270 */   128,  451,  576,  969,  576, 1224,  498,  373, 1595, 1554,
  /*  1280 */   134,  134,  134,  134,  133,  133,  132,  132,  132,  131,
- /*  1290 */   128,  455,  536,  461,  580,   82,   82,   82,   82,  111,
+ /*  1290 */   128,  451,  532,  457,  576,   82,   82,   82,   82,  111,
  /*  1300 */   134,  134,  134,  134,  133,  133,  132,  132,  132,  131,
- /*  1310 */   128,  455,  109,  233,  434, 1580,  550,   67,   67,    7,
- /*  1320 */   417,  355,  554, 1554,  260,  259,  258,  498,  447,  573,
- /*  1330 */   423,  987,  450, 1228,  454,  549, 1211,  580,  973,  988,
- /*  1340 */   417,  479, 1453, 1578, 1184,  138,   91,    7, 1232, 1232,
- /*  1350 */  1067, 1070, 1057, 1057,  135,  135,  136,  136,  136,  136,
- /*  1360 */    21,   21,  267,  580,  300, 1130,   91,  233, 1232, 1232,
- /*  1370 */  1067, 1070, 1057, 1057,  135,  135,  136,  136,  136,  136,
- /*  1380 */  1131,  377, 1599,  161, 1577,   16,   53,   53,    7,  108,
- /*  1390 */   537,   38,  973,  125, 1211, 1132, 1184,  580, 1228,  123,
- /*  1400 */   572,  897,    4,  324,  134,  134,  134,  134,  133,  133,
- /*  1410 */   132,  132,  132,  131,  128,  455,  575,  568,  538,  580,
- /*  1420 */    68,   68,  580,   39,  134,  134,  134,  134,  133,  133,
- /*  1430 */   132,  132,  132,  131,  128,  455,  580,  160, 1575, 1227,
- /*  1440 */   456,  580,   54,   54,  580,   69,   69,  580, 1370,  580,
- /*  1450 */   424,  184,  569,  467,  297,  580, 1228,  467,  297,   70,
- /*  1460 */    70,  580,   44,  478,   71,   71,  580,   72,   72,  580,
- /*  1470 */    73,   73,   55,   55,  415,  878,  242,  580,   56,   56,
- /*  1480 */   580, 1044,  580,  482,   57,   57,  580,  121,  121,   59,
- /*  1490 */    59,   23,   60,   60,  415,  122,  319,  456,  581,  456,
- /*  1500 */    74,   74, 1032,   75,   75,   76,   76,  415,  290,   20,
- /*  1510 */    20,  108,  287,  231,  557,  123,  572,  325,    4,  320,
- /*  1520 */   571,   97,  218,  948, 1148,  328,  404,  580,  947,  580,
- /*  1530 */  1384,  428,  575,  878, 1032, 1032, 1034, 1035,   35,  293,
- /*  1540 */   538,  580, 1108,  580, 1108,    9,  580,  346,  580,  111,
- /*  1550 */    77,   77,  143,  143,  580,  205,  456,  222, 1383,  893,
- /*  1560 */   580,  905,  904, 1192,  144,  144,   78,   78,  569,   62,
- /*  1570 */    62,   79,   79,  323, 1025,  580,  266,   63,   63,  912,
- /*  1580 */   913, 1593,  546,   80,   80,  580,  375,  545,  123,  572,
- /*  1590 */   484,    4,  266,  486,  244,  266,  374, 1044,   64,   64,
- /*  1600 */   580,  470,  580,  121,  121,  575, 1561,  580,  170,  170,
- /*  1610 */   580,  122,  580,  456,  581,  456,  580,  893, 1032,  580,
- /*  1620 */   165,  580,  111,  171,  171,   87,   87,  341, 1620,  456,
- /*  1630 */    65,   65, 1534,   83,   83,  146,  146,  990,  991,   84,
- /*  1640 */    84,  569,  168,  168,  148,  148, 1096,  351, 1036,  111,
- /*  1650 */  1032, 1032, 1034, 1035,   35,  546, 1107,  580, 1107,  580,
- /*  1660 */   547,  123,  572,  508,    4,  263,  580,  365, 1533,  111,
- /*  1670 */  1044, 1092,  580,  263,  580,  494,  121,  121,  575, 1192,
- /*  1680 */   142,  142,  169,  169,  122,  580,  456,  581,  456,  162,
- /*  1690 */   162, 1032,  580,  567,  580,  152,  152,  151,  151,  352,
- /*  1700 */  1380,  978,  456,  266, 1096,  946, 1036,  125,  149,  149,
- /*  1710 */   943,  580,  125,  580,  569,  150,  150,   86,   86,  876,
- /*  1720 */   356,  159,  580, 1032, 1032, 1034, 1035,   35,  546,  945,
- /*  1730 */   580,  125,  359,  545,   88,   88,   85,   85,  361,  363,
- /*  1740 */  1328, 1312,  370, 1044,  380,   52,   52,  503, 1393,  121,
- /*  1750 */   121, 1438, 1192,   58,   58, 1366, 1378,  122, 1443,  456,
- /*  1760 */   581,  456, 1293,  167, 1032, 1284,  280, 1272, 1271, 1273,
- /*  1770 */  1613, 1363,  312,  313,   12,  314,  401, 1425,  224,  333,
- /*  1780 */   295,  237,  336,  343,  344, 1430,  301,  349,  488,  228,
- /*  1790 */  1375, 1311, 1376, 1374, 1429,  408, 1032, 1032, 1034, 1035,
- /*  1800 */    35, 1605, 1196,  458,  513,  373,  292, 1506,  210, 1505,
- /*  1810 */  1373,  400,  400,  399,  277,  397,  211,  570,  863, 1616,
- /*  1820 */  1248,  123,  572,  395,    4, 1192,  223,  270, 1553, 1551,
- /*  1830 */  1245,  239,  186,  327,  426,   96,  195,  220,  575,  235,
- /*  1840 */   140,  326, 1420,  557,  332, 1511,  180,  188,   92, 1413,
- /*  1850 */   335,   95, 1426,   13,  472,  190,  191,  192,  193,  473,
- /*  1860 */   506,  247,  456,  109, 1432,   14, 1431, 1434,  406,  199,
- /*  1870 */   480,  495,  241,  409,  569,  251, 1500,  102,  501,  253,
- /*  1880 */   175,  281,  203,   43,  504,  358,  411, 1522,  254,  255,
- /*  1890 */   354, 1274,  522, 1331,  440, 1330, 1329, 1322,  104,  897,
- /*  1900 */   240, 1321,  229, 1044,  444,  445, 1630,  448,  531,  121,
- /*  1910 */   121, 1598,  268, 1301,  412,  310, 1300,  122, 1629,  456,
- /*  1920 */   581,  456,  372, 1299, 1032,  311, 1628,  378, 1584,   90,
- /*  1930 */   572,  269,    4, 1583, 1398,  418,   11,  116, 1397, 1487,
- /*  1940 */   320,  571,  389,  559,  318,  110,  575,  541,  216, 1354,
- /*  1950 */   387,   42, 1353,  583, 1202,  394, 1032, 1032, 1034, 1035,
- /*  1960 */    35,  276,  393,  278,  462,  279,  584, 1269, 1264,  172,
- /*  1970 */   456,  419, 1538,  420,  185,  173, 1539, 1537, 1536,  156,
- /*  1980 */   308,  850,  569,  457,  225, 1192,  226,  174,  217,  322,
- /*  1990 */   236,   89,  154, 1106, 1104,  330,  187,  176, 1227,  189,
- /*  2000 */   342,  929,  243,  246, 1120,  194,  177,  429,  178,  431,
- /*  2010 */    98, 1044,   99,  196,  100,  101,  179,  121,  121, 1123,
- /*  2020 */   248,  249, 1119,  163,   24,  122,  353,  456,  581,  456,
- /*  2030 */  1196,  458, 1032,  250,  292,  266, 1112,  200, 1242,  400,
- /*  2040 */   400,  399,  277,  397,  201,  500,  863,  252,  292,   15,
- /*  2050 */   865,  558,  505,  400,  400,  399,  277,  397,  256,  239,
- /*  2060 */   863,  327,  374,  202, 1032, 1032, 1034, 1035,   35,  326,
- /*  2070 */   103,   25,   26,  239,  509,  327,  366,  514,  369,  895,
- /*  2080 */   517,  105,  309,  326,  908,  164,   27,  106,  181,  525,
- /*  2090 */   107, 1189, 1073, 1192, 1159,   17, 1158,  230,  284,  286,
- /*  2100 */   241,  204,  982,  125,  265, 1175,   28,  976,  175, 1177,
- /*  2110 */  1179,   43, 1183, 1164,  241,   29,   30,   31,    8,   32,
- /*  2120 */  1182,   41,  175,  208,  553,   43,  111,   33,  240, 1087,
- /*  2130 */   113,  114, 1074, 1072, 1076,   34, 1077,  565, 1128,  118,
- /*  2140 */   271,   36,  240,   18,  939, 1037,  877,  272,  124,   37,
- /*  2150 */   398, 1198,  153,  576,  273, 1621,  183, 1197, 1260, 1260,
- /*  2160 */  1260, 1260, 1260,  418, 1260, 1260, 1260, 1260,  320,  571,
- /*  2170 */  1260, 1260, 1260, 1260, 1260, 1260, 1260,  418, 1260, 1260,
- /*  2180 */  1260, 1260,  320,  571, 1260, 1260, 1260, 1260, 1260, 1260,
- /*  2190 */  1260, 1260,  462, 1260, 1260, 1260, 1260, 1260, 1260, 1260,
- /*  2200 */  1260, 1260, 1260, 1260, 1260, 1260,  462,
+ /*  1310 */   128,  451,  109,  233,  430, 1576,  546,   67,   67,    7,
+ /*  1320 */   413,  351,  550, 1550,  260,  259,  258,  494,  443,  569,
+ /*  1330 */   419,  983,  446, 1224,  450,  545, 1207,  576,  969,  984,
+ /*  1340 */   413,  475, 1449, 1574, 1180,  138,   91,    7, 1228, 1228,
+ /*  1350 */  1063, 1066, 1053, 1053,  135,  135,  136,  136,  136,  136,
+ /*  1360 */    21,   21,  267,  576,  300, 1126,   91,  233, 1228, 1228,
+ /*  1370 */  1063, 1066, 1053, 1053,  135,  135,  136,  136,  136,  136,
+ /*  1380 */  1127,  373, 1595,  161, 1573,   16,   53,   53,    7,  108,
+ /*  1390 */   533,   38,  969,  125, 1207, 1128, 1180,  576, 1224,  123,
+ /*  1400 */   568,  893,    4,  324,  134,  134,  134,  134,  133,  133,
+ /*  1410 */   132,  132,  132,  131,  128,  451,  571,  564,  534,  576,
+ /*  1420 */    68,   68,  576,   39,  134,  134,  134,  134,  133,  133,
+ /*  1430 */   132,  132,  132,  131,  128,  451,  576,  160, 1571, 1223,
+ /*  1440 */   452,  576,   54,   54,  576,   69,   69,  576, 1366,  576,
+ /*  1450 */   420,  184,  565,  463,  297,  576, 1224,  463,  297,   70,
+ /*  1460 */    70,  576,   44,  474,   71,   71,  576,   72,   72,  576,
+ /*  1470 */    73,   73,   55,   55,  411,  874,  242,  576,   56,   56,
+ /*  1480 */   576, 1040,  576,  478,   57,   57,  576,  121,  121,   59,
+ /*  1490 */    59,   23,   60,   60,  411,  122,  319,  452,  577,  452,
+ /*  1500 */    74,   74, 1028,   75,   75,   76,   76,  411,  290,   20,
+ /*  1510 */    20,  108,  287,  231,  553,  123,  568,  325,    4,  320,
+ /*  1520 */   567,   97,  218,  944, 1144,  328,  400,  576,  943,  576,
+ /*  1530 */  1380,  424,  571,  874, 1028, 1028, 1030, 1031,   35,  293,
+ /*  1540 */   534,  576, 1104,  576, 1104,    9,  576,  342,  576,  111,
+ /*  1550 */    77,   77,  143,  143,  576,  205,  452,  222, 1379,  889,
+ /*  1560 */   576,  901,  900, 1188,  144,  144,   78,   78,  565,   62,
+ /*  1570 */    62,   79,   79,  323, 1021,  576,  266,   63,   63,  908,
+ /*  1580 */   909, 1589,  542,   80,   80,  576,  371,  541,  123,  568,
+ /*  1590 */   480,    4,  266,  482,  244,  266,  370, 1040,   64,   64,
+ /*  1600 */   576,  466,  576,  121,  121,  571, 1557,  576,  170,  170,
+ /*  1610 */   576,  122,  576,  452,  577,  452,  576,  889, 1028,  576,
+ /*  1620 */   165,  576,  111,  171,  171,   87,   87,  337, 1616,  452,
+ /*  1630 */    65,   65, 1530,   83,   83,  146,  146,  986,  987,   84,
+ /*  1640 */    84,  565,  168,  168,  148,  148, 1092,  347, 1032,  111,
+ /*  1650 */  1028, 1028, 1030, 1031,   35,  542, 1103,  576, 1103,  576,
+ /*  1660 */   543,  123,  568,  504,    4,  263,  576,  361, 1529,  111,
+ /*  1670 */  1040, 1088,  576,  263,  576,  490,  121,  121,  571, 1188,
+ /*  1680 */   142,  142,  169,  169,  122,  576,  452,  577,  452,  162,
+ /*  1690 */   162, 1028,  576,  563,  576,  152,  152,  151,  151,  348,
+ /*  1700 */  1376,  974,  452,  266, 1092,  942, 1032,  125,  149,  149,
+ /*  1710 */   939,  576,  125,  576,  565,  150,  150,   86,   86,  872,
+ /*  1720 */   352,  159,  576, 1028, 1028, 1030, 1031,   35,  542,  941,
+ /*  1730 */   576,  125,  355,  541,   88,   88,   85,   85,  357,  359,
+ /*  1740 */  1324, 1308,  366, 1040,  376,   52,   52,  499, 1389,  121,
+ /*  1750 */   121, 1434, 1188,   58,   58, 1362, 1374,  122, 1439,  452,
+ /*  1760 */   577,  452, 1289,  167, 1028, 1280,  280, 1268, 1267, 1269,
+ /*  1770 */  1609, 1359,  312,  313,   12,  314,  397, 1421,  224, 1416,
+ /*  1780 */   295,  237, 1409,  339,  340, 1426,  301,  345,  484,  228,
+ /*  1790 */  1371, 1307, 1372, 1370, 1425,  404, 1028, 1028, 1030, 1031,
+ /*  1800 */    35, 1601, 1192,  454,  509,  369,  292, 1502,  210, 1501,
+ /*  1810 */  1369,  396,  396,  395,  277,  393,  211,  566,  859, 1612,
+ /*  1820 */  1244,  123,  568,  391,    4, 1188,  223,  270, 1549, 1547,
+ /*  1830 */  1241,  239,  186,  327,  422,   96,  195,  220,  571,  235,
+ /*  1840 */   180,  326,  188,  468,  190, 1507,  191,  192,   92,  193,
+ /*  1850 */   469,   95, 1422,   13,  502,  247, 1430,  109,  199,  402,
+ /*  1860 */   476,  405,  452, 1496, 1428, 1427,   14,  491,  251,  102,
+ /*  1870 */   497, 1518,  241,  281,  565,  253,  203,  354,  500,  254,
+ /*  1880 */   175, 1270,  407,   43,  350,  518, 1327,  436,  255, 1326,
+ /*  1890 */  1325, 1318,  104,  893, 1626,  229,  408,  440, 1625,  441,
+ /*  1900 */   240,  310, 1296, 1040,  311, 1317,  527, 1594, 1297,  121,
+ /*  1910 */   121,  368, 1295, 1624,  268,  269, 1580,  122, 1579,  452,
+ /*  1920 */   577,  452,  374,  444, 1028, 1394, 1393,  140,  553,   90,
+ /*  1930 */   568,   11,    4, 1483,  383,  414,  385,  110,  116,  216,
+ /*  1940 */   320,  567, 1350,  555,   42,  318,  571,  537, 1349,  389,
+ /*  1950 */   390,  579, 1198,  276,  279,  278, 1028, 1028, 1030, 1031,
+ /*  1960 */    35,  580,  415, 1265,  458, 1260,  416,  185, 1534,  172,
+ /*  1970 */   452, 1535,  173,  156,  308,  846, 1533, 1532,  453,  217,
+ /*  1980 */   225,   89,  565,  174,  322, 1188,  226,  236, 1102,  154,
+ /*  1990 */  1100,  330,  176,  187, 1223,  189,  925,  338,  243, 1116,
+ /*  2000 */   246,  194,  177,  178,  425,  427,   98,   99,  196,  100,
+ /*  2010 */   101, 1040,  179, 1119,  248, 1115,  249,  121,  121,   24,
+ /*  2020 */   163,  250,  349, 1108,  266,  122, 1238,  452,  577,  452,
+ /*  2030 */  1192,  454, 1028,  200,  292,  496,  252,  201,  861,  396,
+ /*  2040 */   396,  395,  277,  393,   15,  501,  859,  370,  292,  256,
+ /*  2050 */   202,  554,  505,  396,  396,  395,  277,  393,  103,  239,
+ /*  2060 */   859,  327,   25,   26, 1028, 1028, 1030, 1031,   35,  326,
+ /*  2070 */   362,  510,  891,  239,  365,  327,  513,  904,  105,  309,
+ /*  2080 */   164,  181,   27,  326,  106,  521,  107, 1185, 1069, 1155,
+ /*  2090 */    17, 1154,  284, 1188,  286,  978,  265,  204,  125, 1171,
+ /*  2100 */   241,  230,  972, 1175,   28, 1160,   29, 1179,  175, 1173,
+ /*  2110 */    30,   43,   31, 1178,  241,   32,   41,  549,    8,   33,
+ /*  2120 */   208,  111,  175, 1083, 1070,   43,  113, 1068,  240,  114,
+ /*  2130 */  1072,   34, 1073,  561, 1124,  118,  271,   36,   18, 1194,
+ /*  2140 */  1033,  873,  240,  935,  124,   37,  272,  273, 1617,  572,
+ /*  2150 */   183,  153,  394, 1193, 1256, 1256, 1256, 1256, 1256, 1256,
+ /*  2160 */  1256, 1256, 1256,  414, 1256, 1256, 1256, 1256,  320,  567,
+ /*  2170 */  1256, 1256, 1256, 1256, 1256, 1256, 1256,  414, 1256, 1256,
+ /*  2180 */  1256, 1256,  320,  567, 1256, 1256, 1256, 1256, 1256, 1256,
+ /*  2190 */  1256, 1256,  458, 1256, 1256, 1256, 1256, 1256, 1256, 1256,
+ /*  2200 */  1256, 1256, 1256, 1256, 1256, 1256,  458,
 };
 static const YYCODETYPE yy_lookahead[] = {
  /*     0 */   276,  277,  278,  240,  241,  224,  194,  226,  194,  240,
@@ -174828,38 +174944,38 @@ static const YYCODETYPE yy_lookahead[] = {
  /*  1810 */   261,   10,   11,   12,   13,   14,  250,  282,   17,  197,
  /*  1820 */    61,   19,   20,  246,   22,  183,  244,  142,  201,  201,
  /*  1830 */    38,   30,  299,   32,  201,  152,   22,  151,   36,  299,
- /*  1840 */   149,   40,  251,  146,  250,  285,   43,  235,  296,  251,
- /*  1850 */   250,  296,  274,  272,   18,  238,  238,  238,  238,  201,
- /*  1860 */    18,  200,   60,  150,  274,  272,  274,  235,  247,  235,
- /*  1870 */   247,  201,   71,  247,   72,  200,  247,  159,   63,  200,
- /*  1880 */    79,  201,   22,   82,  222,  201,  222,  292,  200,  200,
- /*  1890 */   291,  201,  116,  219,   65,  219,  219,  228,   22,  127,
- /*  1900 */    99,  228,  166,  101,   24,  114,  225,   83,  307,  107,
- /*  1910 */   108,  315,  201,  219,  222,  284,  221,  115,  225,  117,
- /*  1920 */   118,  119,  219,  219,  122,  284,  219,  222,  320,   19,
- /*  1930 */    20,   92,   22,  320,  267,  134,   22,  159,  267,  279,
- /*  1940 */   139,  140,  201,  141,  281,  148,   36,  147,  249,  251,
- /*  1950 */   250,   25,  251,  203,   13,  247,  154,  155,  156,  157,
- /*  1960 */   158,  195,  248,  195,  163,    6,  193,  193,  193,  208,
- /*  1970 */    60,  305,  214,  305,  302,  208,  214,  214,  214,  223,
- /*  1980 */   223,    4,   72,    3,  215,  183,  215,  208,   22,  164,
- /*  1990 */    15,  214,   16,   23,   23,  140,  152,  131,   25,  143,
- /*  2000 */    16,   20,   24,  145,    1,  143,  131,   62,  131,   37,
- /*  2010 */    54,  101,   54,  152,   54,   54,  131,  107,  108,  117,
- /*  2020 */    34,  142,    1,    5,   22,  115,  162,  117,  118,  119,
- /*  2030 */     1,    2,  122,  116,    5,   25,   69,   69,   76,   10,
- /*  2040 */    11,   12,   13,   14,  116,   41,   17,  142,    5,   24,
- /*  2050 */    20,  141,   19,   10,   11,   12,   13,   14,  126,   30,
- /*  2060 */    17,   32,  132,   22,  154,  155,  156,  157,  158,   40,
- /*  2070 */    22,   22,   22,   30,   68,   32,   23,   68,   24,   60,
- /*  2080 */    97,   22,   68,   40,   28,   23,   34,  150,   37,   22,
- /*  2090 */    25,   23,   23,  183,   23,   22,   98,  142,   23,   23,
- /*  2100 */    71,   22,  117,   25,   34,   89,   34,  144,   79,   87,
- /*  2110 */    76,   82,   76,   23,   71,   34,   34,   34,   44,   34,
- /*  2120 */    94,   22,   79,   25,   24,   82,   25,   34,   99,   23,
- /*  2130 */   143,  143,   23,   23,   23,   22,   11,   25,   23,   25,
- /*  2140 */    22,   22,   99,   22,  136,   23,   23,  142,   22,   22,
- /*  2150 */    15,    1,   23,   25,  142,  142,   25,    1,  322,  322,
+ /*  1840 */    43,   40,  235,   18,  238,  285,  238,  238,  296,  238,
+ /*  1850 */   201,  296,  274,  272,   18,  200,  235,  150,  235,  247,
+ /*  1860 */   247,  247,   60,  247,  274,  274,  272,  201,  200,  159,
+ /*  1870 */    63,  292,   71,  201,   72,  200,   22,  201,  222,  200,
+ /*  1880 */    79,  201,  222,   82,  291,  116,  219,   65,  200,  219,
+ /*  1890 */   219,  228,   22,  127,  225,  166,  222,   24,  225,  114,
+ /*  1900 */    99,  284,  221,  101,  284,  228,  307,  315,  219,  107,
+ /*  1910 */   108,  219,  219,  219,  201,   92,  320,  115,  320,  117,
+ /*  1920 */   118,  119,  222,   83,  122,  267,  267,  149,  146,   19,
+ /*  1930 */    20,   22,   22,  279,  250,  134,  201,  148,  159,  249,
+ /*  1940 */   139,  140,  251,  141,   25,  281,   36,  147,  251,  248,
+ /*  1950 */   247,  203,   13,  195,    6,  195,  154,  155,  156,  157,
+ /*  1960 */   158,  193,  305,  193,  163,  193,  305,  302,  214,  208,
+ /*  1970 */    60,  214,  208,  223,  223,    4,  214,  214,    3,   22,
+ /*  1980 */   215,  214,   72,  208,  164,  183,  215,   15,   23,   16,
+ /*  1990 */    23,  140,  131,  152,   25,  143,   20,   16,   24,    1,
+ /*  2000 */   145,  143,  131,  131,   62,   37,   54,   54,  152,   54,
+ /*  2010 */    54,  101,  131,  117,   34,    1,  142,  107,  108,   22,
+ /*  2020 */     5,  116,  162,   69,   25,  115,   76,  117,  118,  119,
+ /*  2030 */     1,    2,  122,   69,    5,   41,  142,  116,   20,   10,
+ /*  2040 */    11,   12,   13,   14,   24,   19,   17,  132,    5,  126,
+ /*  2050 */    22,  141,   68,   10,   11,   12,   13,   14,   22,   30,
+ /*  2060 */    17,   32,   22,   22,  154,  155,  156,  157,  158,   40,
+ /*  2070 */    23,   68,   60,   30,   24,   32,   97,   28,   22,   68,
+ /*  2080 */    23,   37,   34,   40,  150,   22,   25,   23,   23,   23,
+ /*  2090 */    22,   98,   23,  183,   23,  117,   34,   22,   25,   89,
+ /*  2100 */    71,  142,  144,   76,   34,   23,   34,   76,   79,   87,
+ /*  2110 */    34,   82,   34,   94,   71,   34,   22,   24,   44,   34,
+ /*  2120 */    25,   25,   79,   23,   23,   82,  143,   23,   99,  143,
+ /*  2130 */    23,   22,   11,   25,   23,   25,   22,   22,   22,    1,
+ /*  2140 */    23,   23,   99,  136,   22,   22,  142,  142,  142,   25,
+ /*  2150 */    25,   23,   15,    1,  322,  322,  322,  322,  322,  322,
  /*  2160 */   322,  322,  322,  134,  322,  322,  322,  322,  139,  140,
  /*  2170 */   322,  322,  322,  322,  322,  322,  322,  134,  322,  322,
  /*  2180 */   322,  322,  139,  140,  322,  322,  322,  322,  322,  322,
@@ -174878,16 +174994,16 @@ static const YYCODETYPE yy_lookahead[] = {
  /*  2310 */   322,  322,  322,  322,  322,  322,  322,  322,  322,  322,
  /*  2320 */   322,  322,  322,  322,  322,  322,  322,  322,  322,  322,
  /*  2330 */   322,  322,  322,  322,  322,  322,  322,  322,  322,  322,
- /*  2340 */   322,  322,  322,  322,  186,  186,  186,  186,  186,  186,
+ /*  2340 */   186,  186,  186,  186,  186,  186,  186,  186,  186,  186,
  /*  2350 */   186,  186,  186,  186,  186,  186,  186,  186,  186,  186,
  /*  2360 */   186,  186,  186,  186,  186,  186,  186,  186,  186,  186,
  /*  2370 */   186,  186,  186,  186,  186,  186,  186,  186,  186,  186,
  /*  2380 */   186,  186,  186,  186,  186,  186,  186,  186,  186,  186,
  /*  2390 */   186,  186,  186,
 };
-#define YY_SHIFT_COUNT    (586)
+#define YY_SHIFT_COUNT    (582)
 #define YY_SHIFT_MIN      (0)
-#define YY_SHIFT_MAX      (2156)
+#define YY_SHIFT_MAX      (2152)
 static const unsigned short int yy_shift_ofst[] = {
  /*     0 */  2029, 1801, 2043, 1380, 1380,   33,  391, 1496, 1569, 1642,
  /*    10 */   702,  702,  702,  193,   33,   33,   33,   33,   33,    0,
@@ -174922,36 +175038,36 @@ static const unsigned short int yy_shift_ofst[] = {
  /*   300 */   749,  749, 1162,  749,  960, 1007, 1274,  738,  215, 1300,
  /*   310 */  1300, 1300, 1395, 1395, 1395, 1395, 1368, 1368, 1033, 1414,
  /*   320 */  1387, 1361, 1759, 1759, 1685, 1685, 1792, 1792, 1685, 1683,
- /*   330 */  1686, 1814, 1691, 1697, 1803, 1691, 1697, 1836, 1836, 1836,
- /*   340 */  1836, 1685, 1842, 1713, 1686, 1686, 1713, 1814, 1803, 1713,
- /*   350 */  1803, 1713, 1685, 1842, 1718, 1815, 1685, 1842, 1860, 1685,
- /*   360 */  1842, 1685, 1842, 1860, 1776, 1776, 1776, 1829, 1876, 1876,
- /*   370 */  1860, 1776, 1772, 1776, 1829, 1776, 1776, 1736, 1880, 1791,
- /*   380 */  1791, 1860, 1685, 1839, 1839, 1824, 1824, 1691, 1697, 1914,
- /*   390 */  1685, 1778, 1691, 1797, 1800, 1713, 1926, 1941, 1941, 1959,
- /*   400 */  1959, 1959, 2207, 2207, 2207, 2207, 2207, 2207, 2207, 2207,
- /*   410 */  2207, 2207, 2207, 2207, 2207, 2207, 2207,   69, 1037,   79,
- /*   420 */  1088,  651, 1196, 1415, 1501, 1439, 1369, 1452,  911, 1211,
- /*   430 */  1524, 1469, 1551, 1567, 1570, 1624, 1640, 1644, 1499, 1440,
- /*   440 */  1572, 1464, 1597,  275,  782, 1586, 1648, 1678, 1553, 1682,
- /*   450 */  1687, 1388, 1502, 1696, 1706, 1588, 1486, 1977, 1980, 1966,
- /*   460 */  1825, 1975, 1976, 1970, 1971, 1855, 1844, 1866, 1973, 1973,
- /*   470 */  1978, 1856, 1981, 1858, 1984, 2003, 1862, 1875, 1973, 1877,
- /*   480 */  1945, 1972, 1973, 1861, 1956, 1958, 1960, 1961, 1885, 1902,
- /*   490 */  1986, 1879, 2021, 2018, 2002, 1917, 1864, 1967, 2010, 1968,
- /*   500 */  1962, 2004, 1905, 1928, 2025, 2030, 2033, 1930, 1932, 2041,
- /*   510 */  2006, 2048, 2049, 2053, 2050, 2009, 2019, 2054, 1983, 2056,
- /*   520 */  2059, 2014, 2051, 2062, 2052, 1937, 2067, 2068, 2069, 2065,
- /*   530 */  2071, 2073, 1998, 1955, 2075, 2076, 1985, 2070, 2079, 1963,
- /*   540 */  2078, 2072, 2081, 2082, 2083, 2016, 2034, 2022, 2074, 2036,
- /*   550 */  2026, 2085, 2090, 2099, 2100, 2098, 2101, 2093, 1987, 1988,
- /*   560 */  2106, 2078, 2109, 2110, 2111, 2113, 2112, 2114, 2115, 2118,
- /*   570 */  2125, 2119, 2121, 2122, 2123, 2126, 2127, 2128, 2008, 2005,
- /*   580 */  2012, 2013, 2131, 2129, 2135, 2150, 2156,
+ /*   330 */  1686, 1814, 1797, 1825, 1825, 1825, 1825, 1685, 1836, 1707,
+ /*   340 */  1686, 1686, 1707, 1814, 1797, 1707, 1797, 1707, 1685, 1836,
+ /*   350 */  1710, 1807, 1685, 1836, 1854, 1685, 1836, 1685, 1836, 1854,
+ /*   360 */  1769, 1769, 1769, 1822, 1870, 1870, 1854, 1769, 1766, 1769,
+ /*   370 */  1822, 1769, 1769, 1729, 1873, 1785, 1785, 1854, 1685, 1823,
+ /*   380 */  1823, 1840, 1840, 1778, 1782, 1909, 1685, 1779, 1778, 1789,
+ /*   390 */  1800, 1707, 1919, 1939, 1939, 1948, 1948, 1948, 2207, 2207,
+ /*   400 */  2207, 2207, 2207, 2207, 2207, 2207, 2207, 2207, 2207, 2207,
+ /*   410 */  2207, 2207, 2207,   69, 1037,   79, 1088,  651, 1196, 1415,
+ /*   420 */  1501, 1439, 1369, 1452,  911, 1211, 1524, 1469, 1551, 1567,
+ /*   430 */  1570, 1624, 1640, 1644, 1499, 1440, 1572, 1464, 1597,  275,
+ /*   440 */   782, 1586, 1648, 1678, 1553, 1682, 1687, 1388, 1502, 1696,
+ /*   450 */  1706, 1588, 1486, 1971, 1975, 1957, 1820, 1972, 1973, 1965,
+ /*   460 */  1967, 1851, 1841, 1861, 1969, 1969, 1974, 1852, 1976, 1855,
+ /*   470 */  1981, 1998, 1858, 1871, 1969, 1872, 1942, 1968, 1969, 1856,
+ /*   480 */  1952, 1953, 1955, 1956, 1881, 1896, 1980, 1874, 2014, 2015,
+ /*   490 */  1997, 1905, 1860, 1954, 1999, 1964, 1950, 1994, 1894, 1921,
+ /*   500 */  2020, 2018, 2026, 1915, 1923, 2028, 1984, 2036, 2040, 2047,
+ /*   510 */  2041, 2003, 2012, 2050, 1979, 2049, 2056, 2011, 2044, 2057,
+ /*   520 */  2048, 1934, 2063, 2064, 2065, 2061, 2066, 2068, 1993, 1959,
+ /*   530 */  2069, 2071, 1978, 2062, 2075, 1958, 2073, 2070, 2072, 2076,
+ /*   540 */  2078, 2010, 2027, 2022, 2074, 2031, 2019, 2081, 2082, 2094,
+ /*   550 */  2093, 2095, 2096, 2085, 1983, 1986, 2100, 2073, 2101, 2104,
+ /*   560 */  2107, 2109, 2108, 2110, 2111, 2114, 2121, 2115, 2116, 2117,
+ /*   570 */  2118, 2122, 2123, 2124, 2007, 2004, 2005, 2006, 2125, 2128,
+ /*   580 */  2137, 2138, 2152,
 };
-#define YY_REDUCE_COUNT (416)
+#define YY_REDUCE_COUNT (412)
 #define YY_REDUCE_MIN   (-276)
-#define YY_REDUCE_MAX   (1779)
+#define YY_REDUCE_MAX   (1775)
 static const short yy_reduce_ofst[] = {
  /*     0 */   -66,  217,  -63, -177, -180,  161,  364,   64, -183,  162,
  /*    10 */   223,  367,  414, -173,  473,  514,  525,  622,  626, -207,
@@ -174986,76 +175102,76 @@ static const short yy_reduce_ofst[] = {
  /*   300 */  1512, 1521, 1539, 1522, 1541, 1493, 1583, 1559, 1565, 1585,
  /*   310 */  1587, 1589, 1529, 1531, 1532, 1549, 1558, 1566, 1535, 1577,
  /*   320 */  1582, 1622, 1533, 1540, 1627, 1628, 1552, 1555, 1633, 1560,
- /*   330 */  1578, 1581, 1591, 1594, 1612, 1598, 1600, 1617, 1618, 1619,
- /*   340 */  1620, 1658, 1661, 1621, 1590, 1592, 1623, 1593, 1632, 1626,
- /*   350 */  1634, 1629, 1670, 1675, 1595, 1599, 1680, 1679, 1662, 1684,
- /*   360 */  1688, 1690, 1689, 1664, 1674, 1676, 1677, 1669, 1681, 1693,
- /*   370 */  1692, 1694, 1695, 1703, 1673, 1704, 1707, 1596, 1601, 1631,
- /*   380 */  1641, 1705, 1711, 1608, 1613, 1667, 1671, 1698, 1700, 1660,
- /*   390 */  1741, 1663, 1701, 1699, 1714, 1708, 1750, 1766, 1768, 1773,
- /*   400 */  1774, 1775, 1666, 1668, 1672, 1761, 1758, 1762, 1763, 1764,
- /*   410 */  1767, 1756, 1757, 1769, 1771, 1777, 1779,
+ /*   330 */  1578, 1581, 1607, 1606, 1608, 1609, 1611, 1649, 1655, 1612,
+ /*   340 */  1590, 1591, 1613, 1594, 1621, 1614, 1623, 1616, 1666, 1668,
+ /*   350 */  1579, 1593, 1672, 1675, 1656, 1676, 1679, 1680, 1688, 1660,
+ /*   360 */  1667, 1670, 1671, 1663, 1669, 1673, 1674, 1689, 1681, 1692,
+ /*   370 */  1677, 1693, 1694, 1592, 1599, 1617, 1620, 1700, 1713, 1596,
+ /*   380 */  1598, 1658, 1659, 1691, 1684, 1654, 1735, 1664, 1697, 1690,
+ /*   390 */  1701, 1703, 1748, 1758, 1760, 1768, 1770, 1772, 1657, 1661,
+ /*   400 */  1665, 1761, 1754, 1757, 1762, 1763, 1764, 1750, 1751, 1765,
+ /*   410 */  1771, 1767, 1775,
 };
 static const YYACTIONTYPE yy_default[] = {
- /*     0 */  1667, 1667, 1667, 1495, 1258, 1371, 1258, 1258, 1258, 1258,
- /*    10 */  1495, 1495, 1495, 1258, 1258, 1258, 1258, 1258, 1258, 1401,
- /*    20 */  1401, 1548, 1291, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*    30 */  1258, 1258, 1258, 1258, 1258, 1494, 1258, 1258, 1258, 1258,
- /*    40 */  1582, 1582, 1258, 1258, 1258, 1258, 1258, 1567, 1566, 1258,
- /*    50 */  1258, 1258, 1410, 1258, 1417, 1258, 1258, 1258, 1258, 1258,
- /*    60 */  1496, 1497, 1258, 1258, 1258, 1258, 1547, 1549, 1512, 1424,
- /*    70 */  1423, 1422, 1421, 1530, 1389, 1415, 1408, 1412, 1491, 1492,
- /*    80 */  1490, 1645, 1497, 1496, 1258, 1411, 1459, 1475, 1458, 1258,
- /*    90 */  1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   100 */  1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   110 */  1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   120 */  1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   130 */  1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   140 */  1258, 1258, 1467, 1474, 1473, 1472, 1481, 1471, 1468, 1461,
- /*   150 */  1460, 1462, 1463, 1282, 1258, 1279, 1333, 1258, 1258, 1258,
- /*   160 */  1258, 1258, 1464, 1291, 1452, 1451, 1450, 1258, 1478, 1465,
- /*   170 */  1477, 1476, 1555, 1619, 1618, 1513, 1258, 1258, 1258, 1258,
- /*   180 */  1258, 1258, 1582, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   190 */  1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   200 */  1258, 1258, 1258, 1258, 1258, 1391, 1582, 1582, 1258, 1291,
- /*   210 */  1582, 1582, 1392, 1392, 1287, 1287, 1395, 1562, 1362, 1362,
- /*   220 */  1362, 1362, 1371, 1362, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   230 */  1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1552,
- /*   240 */  1550, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   250 */  1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   260 */  1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1367, 1258,
- /*   270 */  1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1612,
- /*   280 */  1258, 1525, 1347, 1367, 1367, 1367, 1367, 1369, 1348, 1346,
- /*   290 */  1361, 1292, 1265, 1659, 1427, 1416, 1368, 1416, 1656, 1414,
- /*   300 */  1427, 1427, 1414, 1427, 1368, 1656, 1308, 1634, 1303, 1401,
- /*   310 */  1401, 1401, 1391, 1391, 1391, 1391, 1395, 1395, 1493, 1368,
- /*   320 */  1361, 1258, 1659, 1659, 1377, 1377, 1658, 1658, 1377, 1513,
- /*   330 */  1642, 1436, 1409, 1395, 1336, 1409, 1395, 1342, 1342, 1342,
- /*   340 */  1342, 1377, 1276, 1414, 1642, 1642, 1414, 1436, 1336, 1414,
- /*   350 */  1336, 1414, 1377, 1276, 1529, 1653, 1377, 1276, 1503, 1377,
- /*   360 */  1276, 1377, 1276, 1503, 1334, 1334, 1334, 1323, 1258, 1258,
- /*   370 */  1503, 1334, 1308, 1334, 1323, 1334, 1334, 1600, 1258, 1507,
- /*   380 */  1507, 1503, 1377, 1592, 1592, 1404, 1404, 1409, 1395, 1498,
- /*   390 */  1377, 1258, 1409, 1407, 1405, 1414, 1326, 1615, 1615, 1611,
- /*   400 */  1611, 1611, 1664, 1664, 1562, 1627, 1291, 1291, 1291, 1291,
- /*   410 */  1627, 1310, 1310, 1292, 1292, 1291, 1627, 1258, 1258, 1258,
- /*   420 */  1258, 1258, 1258, 1622, 1258, 1557, 1514, 1381, 1258, 1258,
- /*   430 */  1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   440 */  1258, 1258, 1258, 1258, 1568, 1258, 1258, 1258, 1258, 1258,
- /*   450 */  1258, 1258, 1258, 1258, 1258, 1258, 1441, 1258, 1261, 1559,
- /*   460 */  1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1418, 1419,
- /*   470 */  1382, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1433, 1258,
- /*   480 */  1258, 1258, 1428, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   490 */  1258, 1655, 1258, 1258, 1258, 1258, 1258, 1258, 1528, 1527,
- /*   500 */  1258, 1258, 1379, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   510 */  1258, 1258, 1258, 1258, 1258, 1258, 1306, 1258, 1258, 1258,
- /*   520 */  1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   530 */  1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   540 */  1406, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258, 1258,
- /*   550 */  1258, 1258, 1258, 1258, 1258, 1597, 1396, 1258, 1258, 1258,
- /*   560 */  1258, 1646, 1258, 1258, 1258, 1258, 1356, 1258, 1258, 1258,
- /*   570 */  1258, 1258, 1258, 1258, 1258, 1258, 1258, 1638, 1350, 1442,
- /*   580 */  1258, 1445, 1280, 1258, 1270, 1258, 1258,
+ /*     0 */  1663, 1663, 1663, 1491, 1254, 1367, 1254, 1254, 1254, 1254,
+ /*    10 */  1491, 1491, 1491, 1254, 1254, 1254, 1254, 1254, 1254, 1397,
+ /*    20 */  1397, 1544, 1287, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*    30 */  1254, 1254, 1254, 1254, 1254, 1490, 1254, 1254, 1254, 1254,
+ /*    40 */  1578, 1578, 1254, 1254, 1254, 1254, 1254, 1563, 1562, 1254,
+ /*    50 */  1254, 1254, 1406, 1254, 1413, 1254, 1254, 1254, 1254, 1254,
+ /*    60 */  1492, 1493, 1254, 1254, 1254, 1254, 1543, 1545, 1508, 1420,
+ /*    70 */  1419, 1418, 1417, 1526, 1385, 1411, 1404, 1408, 1487, 1488,
+ /*    80 */  1486, 1641, 1493, 1492, 1254, 1407, 1455, 1471, 1454, 1254,
+ /*    90 */  1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   100 */  1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   110 */  1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   120 */  1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   130 */  1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   140 */  1254, 1254, 1463, 1470, 1469, 1468, 1477, 1467, 1464, 1457,
+ /*   150 */  1456, 1458, 1459, 1278, 1254, 1275, 1329, 1254, 1254, 1254,
+ /*   160 */  1254, 1254, 1460, 1287, 1448, 1447, 1446, 1254, 1474, 1461,
+ /*   170 */  1473, 1472, 1551, 1615, 1614, 1509, 1254, 1254, 1254, 1254,
+ /*   180 */  1254, 1254, 1578, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   190 */  1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   200 */  1254, 1254, 1254, 1254, 1254, 1387, 1578, 1578, 1254, 1287,
+ /*   210 */  1578, 1578, 1388, 1388, 1283, 1283, 1391, 1558, 1358, 1358,
+ /*   220 */  1358, 1358, 1367, 1358, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   230 */  1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1548,
+ /*   240 */  1546, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   250 */  1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   260 */  1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1363, 1254,
+ /*   270 */  1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1608,
+ /*   280 */  1254, 1521, 1343, 1363, 1363, 1363, 1363, 1365, 1344, 1342,
+ /*   290 */  1357, 1288, 1261, 1655, 1423, 1412, 1364, 1412, 1652, 1410,
+ /*   300 */  1423, 1423, 1410, 1423, 1364, 1652, 1304, 1630, 1299, 1397,
+ /*   310 */  1397, 1397, 1387, 1387, 1387, 1387, 1391, 1391, 1489, 1364,
+ /*   320 */  1357, 1254, 1655, 1655, 1373, 1373, 1654, 1654, 1373, 1509,
+ /*   330 */  1638, 1432, 1332, 1338, 1338, 1338, 1338, 1373, 1272, 1410,
+ /*   340 */  1638, 1638, 1410, 1432, 1332, 1410, 1332, 1410, 1373, 1272,
+ /*   350 */  1525, 1649, 1373, 1272, 1499, 1373, 1272, 1373, 1272, 1499,
+ /*   360 */  1330, 1330, 1330, 1319, 1254, 1254, 1499, 1330, 1304, 1330,
+ /*   370 */  1319, 1330, 1330, 1596, 1254, 1503, 1503, 1499, 1373, 1588,
+ /*   380 */  1588, 1400, 1400, 1405, 1391, 1494, 1373, 1254, 1405, 1403,
+ /*   390 */  1401, 1410, 1322, 1611, 1611, 1607, 1607, 1607, 1660, 1660,
+ /*   400 */  1558, 1623, 1287, 1287, 1287, 1287, 1623, 1306, 1306, 1288,
+ /*   410 */  1288, 1287, 1623, 1254, 1254, 1254, 1254, 1254, 1254, 1618,
+ /*   420 */  1254, 1553, 1510, 1377, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   430 */  1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   440 */  1564, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   450 */  1254, 1254, 1437, 1254, 1257, 1555, 1254, 1254, 1254, 1254,
+ /*   460 */  1254, 1254, 1254, 1254, 1414, 1415, 1378, 1254, 1254, 1254,
+ /*   470 */  1254, 1254, 1254, 1254, 1429, 1254, 1254, 1254, 1424, 1254,
+ /*   480 */  1254, 1254, 1254, 1254, 1254, 1254, 1254, 1651, 1254, 1254,
+ /*   490 */  1254, 1254, 1254, 1254, 1524, 1523, 1254, 1254, 1375, 1254,
+ /*   500 */  1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   510 */  1254, 1254, 1302, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   520 */  1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   530 */  1254, 1254, 1254, 1254, 1254, 1254, 1402, 1254, 1254, 1254,
+ /*   540 */  1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   550 */  1254, 1593, 1392, 1254, 1254, 1254, 1254, 1642, 1254, 1254,
+ /*   560 */  1254, 1254, 1352, 1254, 1254, 1254, 1254, 1254, 1254, 1254,
+ /*   570 */  1254, 1254, 1254, 1634, 1346, 1438, 1254, 1441, 1276, 1254,
+ /*   580 */  1266, 1254, 1254,
 };
 /********** End of lemon-generated parsing tables *****************************/
 
@@ -175825,14 +175941,14 @@ static const char *const yyRuleName[] = {
  /* 149 */ "limit_opt ::= LIMIT expr",
  /* 150 */ "limit_opt ::= LIMIT expr OFFSET expr",
  /* 151 */ "limit_opt ::= LIMIT expr COMMA expr",
- /* 152 */ "cmd ::= with DELETE FROM xfullname indexed_opt where_opt_ret orderby_opt limit_opt",
+ /* 152 */ "cmd ::= with DELETE FROM xfullname indexed_opt where_opt_ret",
  /* 153 */ "where_opt ::=",
  /* 154 */ "where_opt ::= WHERE expr",
  /* 155 */ "where_opt_ret ::=",
  /* 156 */ "where_opt_ret ::= WHERE expr",
  /* 157 */ "where_opt_ret ::= RETURNING selcollist",
  /* 158 */ "where_opt_ret ::= WHERE expr RETURNING selcollist",
- /* 159 */ "cmd ::= with UPDATE orconf xfullname indexed_opt SET setlist from where_opt_ret orderby_opt limit_opt",
+ /* 159 */ "cmd ::= with UPDATE orconf xfullname indexed_opt SET setlist from where_opt_ret",
  /* 160 */ "setlist ::= setlist COMMA nm EQ expr",
  /* 161 */ "setlist ::= setlist COMMA LP idlist RP EQ expr",
  /* 162 */ "setlist ::= nm EQ expr",
@@ -176750,14 +176866,14 @@ static const YYCODETYPE yyRuleInfoLhs[] = {
    251,  /* (149) limit_opt ::= LIMIT expr */
    251,  /* (150) limit_opt ::= LIMIT expr OFFSET expr */
    251,  /* (151) limit_opt ::= LIMIT expr COMMA expr */
-   191,  /* (152) cmd ::= with DELETE FROM xfullname indexed_opt where_opt_ret orderby_opt limit_opt */
+   191,  /* (152) cmd ::= with DELETE FROM xfullname indexed_opt where_opt_ret */
    247,  /* (153) where_opt ::= */
    247,  /* (154) where_opt ::= WHERE expr */
    269,  /* (155) where_opt_ret ::= */
    269,  /* (156) where_opt_ret ::= WHERE expr */
    269,  /* (157) where_opt_ret ::= RETURNING selcollist */
    269,  /* (158) where_opt_ret ::= WHERE expr RETURNING selcollist */
-   191,  /* (159) cmd ::= with UPDATE orconf xfullname indexed_opt SET setlist from where_opt_ret orderby_opt limit_opt */
+   191,  /* (159) cmd ::= with UPDATE orconf xfullname indexed_opt SET setlist from where_opt_ret */
    270,  /* (160) setlist ::= setlist COMMA nm EQ expr */
    270,  /* (161) setlist ::= setlist COMMA LP idlist RP EQ expr */
    270,  /* (162) setlist ::= nm EQ expr */
@@ -177164,14 +177280,14 @@ static const signed char yyRuleInfoNRhs[] = {
    -2,  /* (149) limit_opt ::= LIMIT expr */
    -4,  /* (150) limit_opt ::= LIMIT expr OFFSET expr */
    -4,  /* (151) limit_opt ::= LIMIT expr COMMA expr */
-   -8,  /* (152) cmd ::= with DELETE FROM xfullname indexed_opt where_opt_ret orderby_opt limit_opt */
+   -6,  /* (152) cmd ::= with DELETE FROM xfullname indexed_opt where_opt_ret */
     0,  /* (153) where_opt ::= */
    -2,  /* (154) where_opt ::= WHERE expr */
     0,  /* (155) where_opt_ret ::= */
    -2,  /* (156) where_opt_ret ::= WHERE expr */
    -2,  /* (157) where_opt_ret ::= RETURNING selcollist */
    -4,  /* (158) where_opt_ret ::= WHERE expr RETURNING selcollist */
-  -11,  /* (159) cmd ::= with UPDATE orconf xfullname indexed_opt SET setlist from where_opt_ret orderby_opt limit_opt */
+   -9,  /* (159) cmd ::= with UPDATE orconf xfullname indexed_opt SET setlist from where_opt_ret */
    -5,  /* (160) setlist ::= setlist COMMA nm EQ expr */
    -7,  /* (161) setlist ::= setlist COMMA LP idlist RP EQ expr */
    -3,  /* (162) setlist ::= nm EQ expr */
@@ -177760,7 +177876,11 @@ static YYACTIONTYPE yy_reduce(
       case 84: /* cmd ::= select */
 {
   SelectDest dest = {SRT_Output, 0, 0, 0, 0, 0, 0};
-  sqlite3Select(pParse, yymsp[0].minor.yy555, &dest);
+  if( (pParse->db->mDbFlags & DBFLAG_EncodingFixed)!=0
+   || sqlite3ReadSchema(pParse)==SQLITE_OK
+  ){
+    sqlite3Select(pParse, yymsp[0].minor.yy555, &dest);
+  }
   sqlite3SelectDelete(pParse->db, yymsp[0].minor.yy555);
 }
         break;
@@ -178083,17 +178203,10 @@ static YYACTIONTYPE yy_reduce(
       case 151: /* limit_opt ::= LIMIT expr COMMA expr */
 {yymsp[-3].minor.yy454 = sqlite3PExpr(pParse,TK_LIMIT,yymsp[0].minor.yy454,yymsp[-2].minor.yy454);}
         break;
-      case 152: /* cmd ::= with DELETE FROM xfullname indexed_opt where_opt_ret orderby_opt limit_opt */
+      case 152: /* cmd ::= with DELETE FROM xfullname indexed_opt where_opt_ret */
 {
-  sqlite3SrcListIndexedBy(pParse, yymsp[-4].minor.yy203, &yymsp[-3].minor.yy0);
-#ifndef SQLITE_ENABLE_UPDATE_DELETE_LIMIT
-  if( yymsp[-1].minor.yy14 || yymsp[0].minor.yy454 ){
-    updateDeleteLimitError(pParse,yymsp[-1].minor.yy14,yymsp[0].minor.yy454);
-    yymsp[-1].minor.yy14 = 0;
-    yymsp[0].minor.yy454 = 0;
-  }
-#endif
-  sqlite3DeleteFrom(pParse,yymsp[-4].minor.yy203,yymsp[-2].minor.yy454,yymsp[-1].minor.yy14,yymsp[0].minor.yy454);
+  sqlite3SrcListIndexedBy(pParse, yymsp[-2].minor.yy203, &yymsp[-1].minor.yy0);
+  sqlite3DeleteFrom(pParse,yymsp[-2].minor.yy203,yymsp[0].minor.yy454,0,0);
 }
         break;
       case 157: /* where_opt_ret ::= RETURNING selcollist */
@@ -178102,11 +178215,12 @@ static YYACTIONTYPE yy_reduce(
       case 158: /* where_opt_ret ::= WHERE expr RETURNING selcollist */
 {sqlite3AddReturning(pParse,yymsp[0].minor.yy14); yymsp[-3].minor.yy454 = yymsp[-2].minor.yy454;}
         break;
-      case 159: /* cmd ::= with UPDATE orconf xfullname indexed_opt SET setlist from where_opt_ret orderby_opt limit_opt */
+      case 159: /* cmd ::= with UPDATE orconf xfullname indexed_opt SET setlist from where_opt_ret */
 {
-  sqlite3SrcListIndexedBy(pParse, yymsp[-7].minor.yy203, &yymsp[-6].minor.yy0);
-  if( yymsp[-3].minor.yy203 ){
-    SrcList *pFromClause = yymsp[-3].minor.yy203;
+  sqlite3SrcListIndexedBy(pParse, yymsp[-5].minor.yy203, &yymsp[-4].minor.yy0);
+  sqlite3ExprListCheckLength(pParse,yymsp[-2].minor.yy14,"set list");
+  if( yymsp[-1].minor.yy203 ){
+    SrcList *pFromClause = yymsp[-1].minor.yy203;
     if( pFromClause->nSrc>1 ){
       Select *pSubquery;
       Token as;
@@ -178115,17 +178229,9 @@ static YYACTIONTYPE yy_reduce(
       as.z = 0;
       pFromClause = sqlite3SrcListAppendFromTerm(pParse,0,0,0,&as,pSubquery,0);
     }
-    yymsp[-7].minor.yy203 = sqlite3SrcListAppendList(pParse, yymsp[-7].minor.yy203, pFromClause);
+    yymsp[-5].minor.yy203 = sqlite3SrcListAppendList(pParse, yymsp[-5].minor.yy203, pFromClause);
   }
-  sqlite3ExprListCheckLength(pParse,yymsp[-4].minor.yy14,"set list");
-#ifndef SQLITE_ENABLE_UPDATE_DELETE_LIMIT
-  if( yymsp[-1].minor.yy14 || yymsp[0].minor.yy454 ){
-    updateDeleteLimitError(pParse,yymsp[-1].minor.yy14,yymsp[0].minor.yy454);
-    yymsp[-1].minor.yy14 = 0;
-    yymsp[0].minor.yy454 = 0;
-  }
-#endif
-  sqlite3Update(pParse,yymsp[-7].minor.yy203,yymsp[-4].minor.yy14,yymsp[-2].minor.yy454,yymsp[-8].minor.yy144,yymsp[-1].minor.yy14,yymsp[0].minor.yy454,0);
+  sqlite3Update(pParse,yymsp[-5].minor.yy203,yymsp[-2].minor.yy14,yymsp[0].minor.yy454,yymsp[-6].minor.yy144,0,0,0);
 }
         break;
       case 160: /* setlist ::= setlist COMMA nm EQ expr */
@@ -178245,7 +178351,7 @@ static YYACTIONTYPE yy_reduce(
     Token t = yymsp[0].minor.yy0; /*A-overwrites-X*/
     assert( t.n>=2 );
     if( pParse->nested==0 ){
-      sqlite3ErrorMsg(pParse, "near \"%T\": syntax error", &t);
+      parserSyntaxError(pParse, &t);
       yymsp[0].minor.yy454 = 0;
     }else{
       yymsp[0].minor.yy454 = sqlite3PExpr(pParse, TK_REGISTER, 0, 0);
@@ -179093,7 +179199,7 @@ static void yy_syntax_error(
 
   UNUSED_PARAMETER(yymajor);  /* Silence some compiler warnings */
   if( TOKEN.z[0] ){
-    sqlite3ErrorMsg(pParse, "near \"%T\": syntax error", &TOKEN);
+    parserSyntaxError(pParse, &TOKEN);
   }else{
     sqlite3ErrorMsg(pParse, "incomplete input");
   }
@@ -180584,7 +180690,9 @@ SQLITE_PRIVATE int sqlite3RunParser(Parse *pParse, const char *zSql){
     if( pParse->zErrMsg==0 ){
       pParse->zErrMsg = sqlite3MPrintf(db, "%s", sqlite3ErrStr(pParse->rc));
     }
-    sqlite3_log(pParse->rc, "%s in \"%s\"", pParse->zErrMsg, pParse->zTail);
+    if( (pParse->prepFlags & SQLITE_PREPARE_DONT_LOG)==0 ){
+      sqlite3_log(pParse->rc, "%s in \"%s\"", pParse->zErrMsg, pParse->zTail);
+    }
     nErr++;
   }
   pParse->zTail = zSql;
@@ -182557,10 +182665,6 @@ SQLITE_PRIVATE void sqlite3LeaveMutexAndCloseZombie(sqlite3 *db){
   sqlite3Error(db, SQLITE_OK); /* Deallocates any cached error strings. */
   sqlite3ValueFree(db->pErr);
   sqlite3CloseExtensions(db);
-#if SQLITE_USER_AUTHENTICATION
-  sqlite3_free(db->auth.zAuthUser);
-  sqlite3_free(db->auth.zAuthPW);
-#endif
 
   db->eOpenState = SQLITE_STATE_ERROR;
 
@@ -183995,8 +184099,8 @@ static const int aHardLimit[] = {
 #if SQLITE_MAX_VDBE_OP<40
 # error SQLITE_MAX_VDBE_OP must be at least 40
 #endif
-#if SQLITE_MAX_FUNCTION_ARG<0 || SQLITE_MAX_FUNCTION_ARG>127
-# error SQLITE_MAX_FUNCTION_ARG must be between 0 and 127
+#if SQLITE_MAX_FUNCTION_ARG<0 || SQLITE_MAX_FUNCTION_ARG>32767
+# error SQLITE_MAX_FUNCTION_ARG must be between 0 and 32767
 #endif
 #if SQLITE_MAX_ATTACHED<0 || SQLITE_MAX_ATTACHED>125
 # error SQLITE_MAX_ATTACHED must be between 0 and 125
@@ -184063,8 +184167,8 @@ SQLITE_API int sqlite3_limit(sqlite3 *db, int limitId, int newLimit){
   if( newLimit>=0 ){                   /* IMP: R-52476-28732 */
     if( newLimit>aHardLimit[limitId] ){
       newLimit = aHardLimit[limitId];  /* IMP: R-51463-25634 */
-    }else if( newLimit<1 && limitId==SQLITE_LIMIT_LENGTH ){
-      newLimit = 1;
+    }else if( newLimit<SQLITE_MIN_LENGTH && limitId==SQLITE_LIMIT_LENGTH ){
+      newLimit = SQLITE_MIN_LENGTH;
     }
     db->aLimit[limitId] = newLimit;
   }
@@ -185408,7 +185512,6 @@ SQLITE_API int sqlite3_test_control(int op, ...){
       /* Invoke these debugging routines so that the compiler does not
       ** issue "defined but not used" warnings. */
       if( x==9999 ){
-        sqlite3ShowExpr(0);
         sqlite3ShowExpr(0);
         sqlite3ShowExprList(0);
         sqlite3ShowIdList(0);
@@ -193670,7 +193773,7 @@ SQLITE_PRIVATE int sqlite3Fts3Corrupt(){
 }
 #endif
 
-#if !SQLITE_CORE
+#if !defined(SQLITE_CORE)
 /*
 ** Initialize API pointer table, if required.
 */
@@ -215443,8 +215546,8 @@ static void rtreenode(sqlite3_context *ctx, int nArg, sqlite3_value **apArg){
     sqlite3_str_append(pOut, "}", 1);
   }
   errCode = sqlite3_str_errcode(pOut);
-  sqlite3_result_text(ctx, sqlite3_str_finish(pOut), -1, sqlite3_free);
   sqlite3_result_error_code(ctx, errCode);
+  sqlite3_result_text(ctx, sqlite3_str_finish(pOut), -1, sqlite3_free);
 }
 
 /* This routine implements an SQL function that returns the "depth" parameter
@@ -217960,7 +218063,7 @@ SQLITE_API int sqlite3_rtree_query_callback(
   );
 }
 
-#if !SQLITE_CORE
+#ifndef SQLITE_CORE
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
@@ -218551,7 +218654,7 @@ SQLITE_PRIVATE int sqlite3IcuInit(sqlite3 *db){
   return rc;
 }
 
-#if !SQLITE_CORE
+#ifndef SQLITE_CORE
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
@@ -226149,6 +226252,24 @@ static int dbpageRowid(sqlite3_vtab_cursor *pCursor, sqlite_int64 *pRowid){
   return SQLITE_OK;
 }
 
+/*
+** Open write transactions. Since we do not know in advance which database
+** files will be written by the sqlite_dbpage virtual table, start a write
+** transaction on them all.
+**
+** Return SQLITE_OK if successful, or an SQLite error code otherwise.
+*/
+static int dbpageBeginTrans(DbpageTable *pTab){
+  sqlite3 *db = pTab->db;
+  int rc = SQLITE_OK;
+  int i;
+  for(i=0; rc==SQLITE_OK && i<db->nDb; i++){
+    Btree *pBt = db->aDb[i].pBt;
+    if( pBt ) rc = sqlite3BtreeBeginTrans(pBt, 1, 0);
+  }
+  return rc;
+}
+
 static int dbpageUpdate(
   sqlite3_vtab *pVtab,
   int argc,
@@ -226216,6 +226337,12 @@ static int dbpageUpdate(
       goto update_fail;
     }
   }
+
+  if( dbpageBeginTrans(pTab)!=SQLITE_OK ){
+    zErr = "failed to open transaction";
+    goto update_fail;
+  }
+
   pPager = sqlite3BtreePager(pBt);
   rc = sqlite3PagerGet(pPager, pgno, (DbPage**)&pDbPage, 0);
   if( rc==SQLITE_OK ){
@@ -226225,6 +226352,8 @@ static int dbpageUpdate(
       memcpy(aPage, pData, szPage);
       pTab->pgnoTrunc = 0;
     }
+  }else{
+    pTab->pgnoTrunc = 0;
   }
   sqlite3PagerUnref(pDbPage);
   return rc;
@@ -226235,18 +226364,8 @@ update_fail:
   return SQLITE_ERROR;
 }
 
-/* Since we do not know in advance which database files will be
-** written by the sqlite_dbpage virtual table, start a write transaction
-** on them all.
-*/
 static int dbpageBegin(sqlite3_vtab *pVtab){
   DbpageTable *pTab = (DbpageTable *)pVtab;
-  sqlite3 *db = pTab->db;
-  int i;
-  for(i=0; i<db->nDb; i++){
-    Btree *pBt = db->aDb[i].pBt;
-    if( pBt ) (void)sqlite3BtreeBeginTrans(pBt, 1, 0);
-  }
   pTab->pgnoTrunc = 0;
   return SQLITE_OK;
 }
@@ -226258,7 +226377,11 @@ static int dbpageSync(sqlite3_vtab *pVtab){
   if( pTab->pgnoTrunc>0 ){
     Btree *pBt = pTab->db->aDb[pTab->iDbTrunc].pBt;
     Pager *pPager = sqlite3BtreePager(pBt);
-    sqlite3PagerTruncateImage(pPager, pTab->pgnoTrunc);
+    sqlite3BtreeEnter(pBt);
+    if( pTab->pgnoTrunc<sqlite3BtreeLastPage(pBt) ){
+      sqlite3PagerTruncateImage(pPager, pTab->pgnoTrunc);
+    }
+    sqlite3BtreeLeave(pBt);
   }
   pTab->pgnoTrunc = 0;
   return SQLITE_OK;
@@ -226278,7 +226401,7 @@ static int dbpageRollbackTo(sqlite3_vtab *pVtab, int notUsed1){
 */
 SQLITE_PRIVATE int sqlite3DbpageRegister(sqlite3 *db){
   static sqlite3_module dbpage_module = {
-    0,                            /* iVersion */
+    2,                            /* iVersion */
     dbpageConnect,                /* xCreate */
     dbpageConnect,                /* xConnect */
     dbpageBestIndex,              /* xBestIndex */
@@ -231597,12 +231720,12 @@ static int sessionChangesetApply(
       }
     }
   }
-  sqlite3_exec(db, "PRAGMA defer_foreign_keys = 0", 0, 0, 0);
 
   if( (flags & SQLITE_CHANGESETAPPLY_NOSAVEPOINT)==0 ){
     if( rc==SQLITE_OK ){
       rc = sqlite3_exec(db, "RELEASE changeset_apply", 0, 0, 0);
-    }else{
+    }
+    if( rc!=SQLITE_OK ){
       sqlite3_exec(db, "ROLLBACK TO changeset_apply", 0, 0, 0);
       sqlite3_exec(db, "RELEASE changeset_apply", 0, 0, 0);
     }
@@ -233188,13 +233311,28 @@ struct Fts5PhraseIter {
 **   value returned by xInstCount(), SQLITE_RANGE is returned.  Otherwise,
 **   output variable (*ppToken) is set to point to a buffer containing the
 **   matching document token, and (*pnToken) to the size of that buffer in
-**   bytes. This API is not available if the specified token matches a
-**   prefix query term. In that case both output variables are always set
-**   to 0.
+**   bytes.
 **
 **   The output text is not a copy of the document text that was tokenized.
 **   It is the output of the tokenizer module. For tokendata=1 tables, this
 **   includes any embedded 0x00 and trailing data.
+**
+**   This API may be slow in some cases if the token identified by parameters
+**   iIdx and iToken matched a prefix token in the query. In most cases, the
+**   first call to this API for each prefix token in the query is forced
+**   to scan the portion of the full-text index that matches the prefix
+**   token to collect the extra data required by this API. If the prefix
+**   token matches a large number of token instances in the document set,
+**   this may be a performance problem.
+**
+**   If the user knows in advance that a query may use this API for a
+**   prefix token, FTS5 may be configured to collect all required data as part
+**   of the initial querying of the full-text index, avoiding the second scan
+**   entirely. This also causes prefix queries that do not use this API to
+**   run more slowly and use more memory. FTS5 may be configured in this way
+**   either on a per-table basis using the [FTS5 insttoken | 'insttoken']
+**   option, or on a per-query basis using the
+**   [fts5_insttoken | fts5_insttoken()] user function.
 **
 **   This API can be quite slow if used with an FTS5 table created with the
 **   "detail=none" or "detail=column" option.
@@ -233877,7 +234015,8 @@ struct Fts5Config {
   char *zRank;                    /* Name of rank function */
   char *zRankArgs;                /* Arguments to rank function */
   int bSecureDelete;              /* 'secure-delete' */
-  int nDeleteMerge;           /* 'deletemerge' */
+  int nDeleteMerge;               /* 'deletemerge' */
+  int bPrefixInsttoken;           /* 'prefix-insttoken' */
 
   /* If non-NULL, points to sqlite3_vtab.base.zErrmsg. Often NULL. */
   char **pzErrmsg;
@@ -234134,7 +234273,14 @@ static int sqlite3Fts5StructureTest(Fts5Index*, void*);
 /*
 ** Used by xInstToken():
 */
-static int sqlite3Fts5IterToken(Fts5IndexIter*, i64, int, int, const char**, int*);
+static int sqlite3Fts5IterToken(
+  Fts5IndexIter *pIndexIter,
+  const char *pToken, int nToken,
+  i64 iRowid,
+  int iCol,
+  int iOff,
+  const char **ppOut, int *pnOut
+);
 
 /*
 ** Insert or remove data to or from the index. Each time a document is
@@ -238348,6 +238494,19 @@ static int sqlite3Fts5ConfigSetValue(
     }else{
       pConfig->bSecureDelete = (bVal ? 1 : 0);
     }
+  }
+
+  else if( 0==sqlite3_stricmp(zKey, "insttoken") ){
+    int bVal = -1;
+    if( SQLITE_INTEGER==sqlite3_value_numeric_type(pVal) ){
+      bVal = sqlite3_value_int(pVal);
+    }
+    if( bVal<0 ){
+      *pbBadkey = 1;
+    }else{
+      pConfig->bPrefixInsttoken = (bVal ? 1 : 0);
+    }
+
   }else{
     *pbBadkey = 1;
   }
@@ -241483,7 +241642,7 @@ static int fts5ExprPopulatePoslistsCb(
         int rc = sqlite3Fts5PoslistWriterAppend(
             &pExpr->apExprPhrase[i]->poslist, &p->aPopulator[i].writer, p->iOff
         );
-        if( rc==SQLITE_OK && pExpr->pConfig->bTokendata && !pT->bPrefix ){
+        if( rc==SQLITE_OK && (pExpr->pConfig->bTokendata || pT->bPrefix) ){
           int iCol = p->iOff>>32;
           int iTokOff = p->iOff & 0x7FFFFFFF;
           rc = sqlite3Fts5IndexIterWriteTokendata(
@@ -241676,15 +241835,14 @@ static int sqlite3Fts5ExprInstToken(
     return SQLITE_RANGE;
   }
   pTerm = &pPhrase->aTerm[iToken];
-  if( pTerm->bPrefix==0 ){
-    if( pExpr->pConfig->bTokendata ){
-      rc = sqlite3Fts5IterToken(
-          pTerm->pIter, iRowid, iCol, iOff+iToken, ppOut, pnOut
-      );
-    }else{
-      *ppOut = pTerm->pTerm;
-      *pnOut = pTerm->nFullTerm;
-    }
+  if( pExpr->pConfig->bTokendata || pTerm->bPrefix ){
+    rc = sqlite3Fts5IterToken(
+        pTerm->pIter, pTerm->pTerm, pTerm->nQueryTerm,
+        iRowid, iCol, iOff+iToken, ppOut, pnOut
+    );
+  }else{
+    *ppOut = pTerm->pTerm;
+    *pnOut = pTerm->nFullTerm;
   }
   return rc;
 }
@@ -243187,9 +243345,13 @@ static int fts5IndexPrepareStmt(
 ){
   if( p->rc==SQLITE_OK ){
     if( zSql ){
-      p->rc = sqlite3_prepare_v3(p->pConfig->db, zSql, -1,
+      int rc = sqlite3_prepare_v3(p->pConfig->db, zSql, -1,
           SQLITE_PREPARE_PERSISTENT|SQLITE_PREPARE_NO_VTAB,
           ppStmt, 0);
+      /* If this prepare() call fails with SQLITE_ERROR, then one of the
+      ** %_idx or %_data tables has been removed or modified. Call this
+      ** corruption.  */
+      p->rc = (rc==SQLITE_ERROR ? SQLITE_CORRUPT : rc);
     }else{
       p->rc = SQLITE_NOMEM;
     }
@@ -247769,6 +247931,24 @@ static void fts5FlushSecureDelete(
   const int f = FTS5INDEX_QUERY_SKIPHASH;
   Fts5Iter *pIter = 0;            /* Used to find term instance */
 
+  /* If the version number has not been set to SECUREDELETE, do so now. */
+  if( p->pConfig->iVersion!=FTS5_CURRENT_VERSION_SECUREDELETE ){
+    Fts5Config *pConfig = p->pConfig;
+    sqlite3_stmt *pStmt = 0;
+    fts5IndexPrepareStmt(p, &pStmt, sqlite3_mprintf(
+          "REPLACE INTO %Q.'%q_config' VALUES ('version', %d)",
+          pConfig->zDb, pConfig->zName, FTS5_CURRENT_VERSION_SECUREDELETE
+    ));
+    if( p->rc==SQLITE_OK ){
+      int rc;
+      sqlite3_step(pStmt);
+      rc = sqlite3_finalize(pStmt);
+      if( p->rc==SQLITE_OK ) p->rc = rc;
+      pConfig->iCookie++;
+      pConfig->iVersion = FTS5_CURRENT_VERSION_SECUREDELETE;
+    }
+  }
+
   fts5MultiIterNew(p, pStruct, f, 0, (const u8*)zTerm, nTerm, -1, 0, &pIter);
   if( fts5MultiIterEof(p, pIter)==0 ){
     i64 iThis = fts5MultiIterRowid(pIter);
@@ -248499,6 +248679,383 @@ static void fts5MergePrefixLists(
   *p1 = out;
 }
 
+
+/*
+** Iterate through a range of entries in the FTS index, invoking the xVisit
+** callback for each of them.
+**
+** Parameter pToken points to an nToken buffer containing an FTS index term
+** (i.e. a document term with the preceding 1 byte index identifier -
+** FTS5_MAIN_PREFIX or similar). If bPrefix is true, then the call visits
+** all entries for terms that have pToken/nToken as a prefix. If bPrefix
+** is false, then only entries with pToken/nToken as the entire key are
+** visited.
+**
+** If the current table is a tokendata=1 table, then if bPrefix is true then
+** each index term is treated separately. However, if bPrefix is false, then
+** all index terms corresponding to pToken/nToken are collapsed into a single
+** term before the callback is invoked.
+**
+** The callback invoked for each entry visited is specified by paramter xVisit.
+** Each time it is invoked, it is passed a pointer to the Fts5Index object,
+** a copy of the 7th paramter to this function (pCtx) and a pointer to the
+** iterator that indicates the current entry. If the current entry is the
+** first with a new term (i.e. different from that of the previous entry,
+** including the very first term), then the final two parameters are passed
+** a pointer to the term and its size in bytes, respectively. If the current
+** entry is not the first associated with its term, these two parameters
+** are passed 0.
+**
+** If parameter pColset is not NULL, then it is used to filter entries before
+** the callback is invoked.
+*/
+static int fts5VisitEntries(
+  Fts5Index *p,                   /* Fts5 index object */
+  Fts5Colset *pColset,            /* Columns filter to apply, or NULL */
+  u8 *pToken,                     /* Buffer containing token */
+  int nToken,                     /* Size of buffer pToken in bytes */
+  int bPrefix,                    /* True for a prefix scan */
+  void (*xVisit)(Fts5Index*, void *pCtx, Fts5Iter *pIter, const u8*, int),
+  void *pCtx                      /* Passed as second argument to xVisit() */
+){
+  const int flags = (bPrefix ? FTS5INDEX_QUERY_SCAN : 0)
+                  | FTS5INDEX_QUERY_SKIPEMPTY
+                  | FTS5INDEX_QUERY_NOOUTPUT;
+  Fts5Iter *p1 = 0;     /* Iterator used to gather data from index */
+  int bNewTerm = 1;
+  Fts5Structure *pStruct = fts5StructureRead(p);
+
+  fts5MultiIterNew(p, pStruct, flags, pColset, pToken, nToken, -1, 0, &p1);
+  fts5IterSetOutputCb(&p->rc, p1);
+  for( /* no-op */ ;
+      fts5MultiIterEof(p, p1)==0;
+      fts5MultiIterNext2(p, p1, &bNewTerm)
+  ){
+    Fts5SegIter *pSeg = &p1->aSeg[ p1->aFirst[1].iFirst ];
+    int nNew = 0;
+    const u8 *pNew = 0;
+
+    p1->xSetOutputs(p1, pSeg);
+    if( p->rc ) break;
+
+    if( bNewTerm ){
+      nNew = pSeg->term.n;
+      pNew = pSeg->term.p;
+      if( nNew<nToken || memcmp(pToken, pNew, nToken) ) break;
+    }
+
+    xVisit(p, pCtx, p1, pNew, nNew);
+  }
+  fts5MultiIterFree(p1);
+
+  fts5StructureRelease(pStruct);
+  return p->rc;
+}
+
+
+/*
+** Usually, a tokendata=1 iterator (struct Fts5TokenDataIter) accumulates an
+** array of these for each row it visits (so all iRowid fields are the same).
+** Or, for an iterator used by an "ORDER BY rank" query, it accumulates an
+** array of these for the entire query (in which case iRowid fields may take
+** a variety of values).
+**
+** Each instance in the array indicates the iterator (and therefore term)
+** associated with position iPos of rowid iRowid. This is used by the
+** xInstToken() API.
+**
+** iRowid:
+**   Rowid for the current entry.
+**
+** iPos:
+**   Position of current entry within row. In the usual ((iCol<<32)+iOff)
+**   format (e.g. see macros FTS5_POS2COLUMN() and FTS5_POS2OFFSET()).
+**
+** iIter:
+**   If the Fts5TokenDataIter iterator that the entry is part of is
+**   actually an iterator (i.e. with nIter>0, not just a container for
+**   Fts5TokenDataMap structures), then this variable is an index into
+**   the apIter[] array. The corresponding term is that which the iterator
+**   at apIter[iIter] currently points to.
+**
+**   Or, if the Fts5TokenDataIter iterator is just a container object
+**   (nIter==0), then iIter is an index into the term.p[] buffer where
+**   the term is stored.
+**
+** nByte:
+**   In the case where iIter is an index into term.p[], this variable
+**   is the size of the term in bytes. If iIter is an index into apIter[],
+**   this variable is unused.
+*/
+struct Fts5TokenDataMap {
+  i64 iRowid;                     /* Row this token is located in */
+  i64 iPos;                       /* Position of token */
+  int iIter;                      /* Iterator token was read from */
+  int nByte;                      /* Length of token in bytes (or 0) */
+};
+
+/*
+** An object used to supplement Fts5Iter for tokendata=1 iterators.
+**
+** This object serves two purposes. The first is as a container for an array
+** of Fts5TokenDataMap structures, which are used to find the token required
+** when the xInstToken() API is used. This is done by the nMapAlloc, nMap and
+** aMap[] variables.
+*/
+struct Fts5TokenDataIter {
+  int nMapAlloc;                  /* Allocated size of aMap[] in entries */
+  int nMap;                       /* Number of valid entries in aMap[] */
+  Fts5TokenDataMap *aMap;         /* Array of (rowid+pos -> token) mappings */
+
+  /* The following are used for prefix-queries only. */
+  Fts5Buffer terms;
+
+  /* The following are used for other full-token tokendata queries only. */
+  int nIter;
+  int nIterAlloc;
+  Fts5PoslistReader *aPoslistReader;
+  int *aPoslistToIter;
+  Fts5Iter *apIter[1];
+};
+
+/*
+** The two input arrays - a1[] and a2[] - are in sorted order. This function
+** merges the two arrays together and writes the result to output array
+** aOut[]. aOut[] is guaranteed to be large enough to hold the result.
+**
+** Duplicate entries are copied into the output. So the size of the output
+** array is always (n1+n2) entries.
+*/
+static void fts5TokendataMerge(
+  Fts5TokenDataMap *a1, int n1,   /* Input array 1 */
+  Fts5TokenDataMap *a2, int n2,   /* Input array 2 */
+  Fts5TokenDataMap *aOut          /* Output array */
+){
+  int i1 = 0;
+  int i2 = 0;
+
+  assert( n1>=0 && n2>=0 );
+  while( i1<n1 || i2<n2 ){
+    Fts5TokenDataMap *pOut = &aOut[i1+i2];
+    if( i2>=n2 || (i1<n1 && (
+        a1[i1].iRowid<a2[i2].iRowid
+     || (a1[i1].iRowid==a2[i2].iRowid && a1[i1].iPos<=a2[i2].iPos)
+    ))){
+      memcpy(pOut, &a1[i1], sizeof(Fts5TokenDataMap));
+      i1++;
+    }else{
+      memcpy(pOut, &a2[i2], sizeof(Fts5TokenDataMap));
+      i2++;
+    }
+  }
+}
+
+
+/*
+** Append a mapping to the token-map belonging to object pT.
+*/
+static void fts5TokendataIterAppendMap(
+  Fts5Index *p,
+  Fts5TokenDataIter *pT,
+  int iIter,
+  int nByte,
+  i64 iRowid,
+  i64 iPos
+){
+  if( p->rc==SQLITE_OK ){
+    if( pT->nMap==pT->nMapAlloc ){
+      int nNew = pT->nMapAlloc ? pT->nMapAlloc*2 : 64;
+      int nAlloc = nNew * sizeof(Fts5TokenDataMap);
+      Fts5TokenDataMap *aNew;
+
+      aNew = (Fts5TokenDataMap*)sqlite3_realloc(pT->aMap, nAlloc);
+      if( aNew==0 ){
+        p->rc = SQLITE_NOMEM;
+        return;
+      }
+
+      pT->aMap = aNew;
+      pT->nMapAlloc = nNew;
+    }
+
+    pT->aMap[pT->nMap].iRowid = iRowid;
+    pT->aMap[pT->nMap].iPos = iPos;
+    pT->aMap[pT->nMap].iIter = iIter;
+    pT->aMap[pT->nMap].nByte = nByte;
+    pT->nMap++;
+  }
+}
+
+/*
+** Sort the contents of the pT->aMap[] array.
+**
+** The sorting algorithm requries a malloc(). If this fails, an error code
+** is left in Fts5Index.rc before returning.
+*/
+static void fts5TokendataIterSortMap(Fts5Index *p, Fts5TokenDataIter *pT){
+  Fts5TokenDataMap *aTmp = 0;
+  int nByte = pT->nMap * sizeof(Fts5TokenDataMap);
+
+  aTmp = (Fts5TokenDataMap*)sqlite3Fts5MallocZero(&p->rc, nByte);
+  if( aTmp ){
+    Fts5TokenDataMap *a1 = pT->aMap;
+    Fts5TokenDataMap *a2 = aTmp;
+    i64 nHalf;
+
+    for(nHalf=1; nHalf<pT->nMap; nHalf=nHalf*2){
+      int i1;
+      for(i1=0; i1<pT->nMap; i1+=(nHalf*2)){
+        int n1 = MIN(nHalf, pT->nMap-i1);
+        int n2 = MIN(nHalf, pT->nMap-i1-n1);
+        fts5TokendataMerge(&a1[i1], n1, &a1[i1+n1], n2, &a2[i1]);
+      }
+      SWAPVAL(Fts5TokenDataMap*, a1, a2);
+    }
+
+    if( a1!=pT->aMap ){
+      memcpy(pT->aMap, a1, pT->nMap*sizeof(Fts5TokenDataMap));
+    }
+    sqlite3_free(aTmp);
+
+#ifdef SQLITE_DEBUG
+    {
+      int ii;
+      for(ii=1; ii<pT->nMap; ii++){
+        Fts5TokenDataMap *p1 = &pT->aMap[ii-1];
+        Fts5TokenDataMap *p2 = &pT->aMap[ii];
+        assert( p1->iRowid<p2->iRowid
+             || (p1->iRowid==p2->iRowid && p1->iPos<=p2->iPos)
+        );
+      }
+    }
+#endif
+  }
+}
+
+/*
+** Delete an Fts5TokenDataIter structure and its contents.
+*/
+static void fts5TokendataIterDelete(Fts5TokenDataIter *pSet){
+  if( pSet ){
+    int ii;
+    for(ii=0; ii<pSet->nIter; ii++){
+      fts5MultiIterFree(pSet->apIter[ii]);
+    }
+    fts5BufferFree(&pSet->terms);
+    sqlite3_free(pSet->aPoslistReader);
+    sqlite3_free(pSet->aMap);
+    sqlite3_free(pSet);
+  }
+}
+
+
+/*
+** fts5VisitEntries() context object used by fts5SetupPrefixIterTokendata()
+** to pass data to prefixIterSetupTokendataCb().
+*/
+typedef struct TokendataSetupCtx TokendataSetupCtx;
+struct TokendataSetupCtx {
+  Fts5TokenDataIter *pT;          /* Object being populated with mappings */
+  int iTermOff;                   /* Offset of current term in terms.p[] */
+  int nTermByte;                  /* Size of current term in bytes */
+};
+
+/*
+** fts5VisitEntries() callback used by fts5SetupPrefixIterTokendata(). This
+** callback adds an entry to the Fts5TokenDataIter.aMap[] array for each
+** position in the current position-list. It doesn't matter that some of
+** these may be out of order - they will be sorted later.
+*/
+static void prefixIterSetupTokendataCb(
+  Fts5Index *p,
+  void *pCtx,
+  Fts5Iter *p1,
+  const u8 *pNew,
+  int nNew
+){
+  TokendataSetupCtx *pSetup = (TokendataSetupCtx*)pCtx;
+  int iPosOff = 0;
+  i64 iPos = 0;
+
+  if( pNew ){
+    pSetup->nTermByte = nNew-1;
+    pSetup->iTermOff = pSetup->pT->terms.n;
+    fts5BufferAppendBlob(&p->rc, &pSetup->pT->terms, nNew-1, pNew+1);
+  }
+
+  while( 0==sqlite3Fts5PoslistNext64(
+     p1->base.pData, p1->base.nData, &iPosOff, &iPos
+  ) ){
+    fts5TokendataIterAppendMap(p,
+        pSetup->pT, pSetup->iTermOff, pSetup->nTermByte, p1->base.iRowid, iPos
+    );
+  }
+}
+
+
+/*
+** Context object passed by fts5SetupPrefixIter() to fts5VisitEntries().
+*/
+typedef struct PrefixSetupCtx PrefixSetupCtx;
+struct PrefixSetupCtx {
+  void (*xMerge)(Fts5Index*, Fts5Buffer*, int, Fts5Buffer*);
+  void (*xAppend)(Fts5Index*, u64, Fts5Iter*, Fts5Buffer*);
+  i64 iLastRowid;
+  int nMerge;
+  Fts5Buffer *aBuf;
+  int nBuf;
+  Fts5Buffer doclist;
+  TokendataSetupCtx *pTokendata;
+};
+
+/*
+** fts5VisitEntries() callback used by fts5SetupPrefixIter()
+*/
+static void prefixIterSetupCb(
+  Fts5Index *p,
+  void *pCtx,
+  Fts5Iter *p1,
+  const u8 *pNew,
+  int nNew
+){
+  PrefixSetupCtx *pSetup = (PrefixSetupCtx*)pCtx;
+  const int nMerge = pSetup->nMerge;
+
+  if( p1->base.nData>0 ){
+    if( p1->base.iRowid<=pSetup->iLastRowid && pSetup->doclist.n>0 ){
+      int i;
+      for(i=0; p->rc==SQLITE_OK && pSetup->doclist.n; i++){
+        int i1 = i*nMerge;
+        int iStore;
+        assert( i1+nMerge<=pSetup->nBuf );
+        for(iStore=i1; iStore<i1+nMerge; iStore++){
+          if( pSetup->aBuf[iStore].n==0 ){
+            fts5BufferSwap(&pSetup->doclist, &pSetup->aBuf[iStore]);
+            fts5BufferZero(&pSetup->doclist);
+            break;
+          }
+        }
+        if( iStore==i1+nMerge ){
+          pSetup->xMerge(p, &pSetup->doclist, nMerge, &pSetup->aBuf[i1]);
+          for(iStore=i1; iStore<i1+nMerge; iStore++){
+            fts5BufferZero(&pSetup->aBuf[iStore]);
+          }
+        }
+      }
+      pSetup->iLastRowid = 0;
+    }
+
+    pSetup->xAppend(
+        p, (u64)p1->base.iRowid-(u64)pSetup->iLastRowid, p1, &pSetup->doclist
+    );
+    pSetup->iLastRowid = p1->base.iRowid;
+  }
+
+  if( pSetup->pTokendata ){
+    prefixIterSetupTokendataCb(p, (void*)pSetup->pTokendata, p1, pNew, nNew);
+  }
+}
+
 static void fts5SetupPrefixIter(
   Fts5Index *p,                   /* Index to read from */
   int bDesc,                      /* True for "ORDER BY rowid DESC" */
@@ -248509,38 +249066,41 @@ static void fts5SetupPrefixIter(
   Fts5Iter **ppIter               /* OUT: New iterator */
 ){
   Fts5Structure *pStruct;
-  Fts5Buffer *aBuf;
-  int nBuf = 32;
-  int nMerge = 1;
+  PrefixSetupCtx s;
+  TokendataSetupCtx s2;
 
-  void (*xMerge)(Fts5Index*, Fts5Buffer*, int, Fts5Buffer*);
-  void (*xAppend)(Fts5Index*, u64, Fts5Iter*, Fts5Buffer*);
-  if( p->pConfig->eDetail==FTS5_DETAIL_NONE ){
-    xMerge = fts5MergeRowidLists;
-    xAppend = fts5AppendRowid;
-  }else{
-    nMerge = FTS5_MERGE_NLIST-1;
-    nBuf = nMerge*8;   /* Sufficient to merge (16^8)==(2^32) lists */
-    xMerge = fts5MergePrefixLists;
-    xAppend = fts5AppendPoslist;
+  memset(&s, 0, sizeof(s));
+  memset(&s2, 0, sizeof(s2));
+
+  s.nMerge = 1;
+  s.iLastRowid = 0;
+  s.nBuf = 32;
+  if( iIdx==0
+   && p->pConfig->eDetail==FTS5_DETAIL_FULL
+   && p->pConfig->bPrefixInsttoken
+  ){
+    s.pTokendata = &s2;
+    s2.pT = (Fts5TokenDataIter*)fts5IdxMalloc(p, sizeof(*s2.pT));
   }
 
-  aBuf = (Fts5Buffer*)fts5IdxMalloc(p, sizeof(Fts5Buffer)*nBuf);
+  if( p->pConfig->eDetail==FTS5_DETAIL_NONE ){
+    s.xMerge = fts5MergeRowidLists;
+    s.xAppend = fts5AppendRowid;
+  }else{
+    s.nMerge = FTS5_MERGE_NLIST-1;
+    s.nBuf = s.nMerge*8;   /* Sufficient to merge (16^8)==(2^32) lists */
+    s.xMerge = fts5MergePrefixLists;
+    s.xAppend = fts5AppendPoslist;
+  }
+
+  s.aBuf = (Fts5Buffer*)fts5IdxMalloc(p, sizeof(Fts5Buffer)*s.nBuf);
   pStruct = fts5StructureRead(p);
-  assert( p->rc!=SQLITE_OK || (aBuf && pStruct) );
+  assert( p->rc!=SQLITE_OK || (s.aBuf && pStruct) );
 
   if( p->rc==SQLITE_OK ){
-    const int flags = FTS5INDEX_QUERY_SCAN
-                    | FTS5INDEX_QUERY_SKIPEMPTY
-                    | FTS5INDEX_QUERY_NOOUTPUT;
+    void *pCtx = (void*)&s;
     int i;
-    i64 iLastRowid = 0;
-    Fts5Iter *p1 = 0;     /* Iterator used to gather data from index */
     Fts5Data *pData;
-    Fts5Buffer doclist;
-    int bNewTerm = 1;
-
-    memset(&doclist, 0, sizeof(doclist));
 
     /* If iIdx is non-zero, then it is the number of a prefix-index for
     ** prefixes 1 character longer than the prefix being queried for. That
@@ -248548,94 +249108,45 @@ static void fts5SetupPrefixIter(
     ** corresponding to the prefix itself. That one is extracted from the
     ** main term index here.  */
     if( iIdx!=0 ){
-      int dummy = 0;
-      const int f2 = FTS5INDEX_QUERY_SKIPEMPTY|FTS5INDEX_QUERY_NOOUTPUT;
       pToken[0] = FTS5_MAIN_PREFIX;
-      fts5MultiIterNew(p, pStruct, f2, pColset, pToken, nToken, -1, 0, &p1);
-      fts5IterSetOutputCb(&p->rc, p1);
-      for(;
-        fts5MultiIterEof(p, p1)==0;
-        fts5MultiIterNext2(p, p1, &dummy)
-      ){
-        Fts5SegIter *pSeg = &p1->aSeg[ p1->aFirst[1].iFirst ];
-        p1->xSetOutputs(p1, pSeg);
-        if( p1->base.nData ){
-          xAppend(p, (u64)p1->base.iRowid-(u64)iLastRowid, p1, &doclist);
-          iLastRowid = p1->base.iRowid;
-        }
-      }
-      fts5MultiIterFree(p1);
+      fts5VisitEntries(p, pColset, pToken, nToken, 0, prefixIterSetupCb, pCtx);
     }
 
     pToken[0] = FTS5_MAIN_PREFIX + iIdx;
-    fts5MultiIterNew(p, pStruct, flags, pColset, pToken, nToken, -1, 0, &p1);
-    fts5IterSetOutputCb(&p->rc, p1);
+    fts5VisitEntries(p, pColset, pToken, nToken, 1, prefixIterSetupCb, pCtx);
 
-    for( /* no-op */ ;
-        fts5MultiIterEof(p, p1)==0;
-        fts5MultiIterNext2(p, p1, &bNewTerm)
-    ){
-      Fts5SegIter *pSeg = &p1->aSeg[ p1->aFirst[1].iFirst ];
-      int nTerm = pSeg->term.n;
-      const u8 *pTerm = pSeg->term.p;
-      p1->xSetOutputs(p1, pSeg);
-
-      assert_nc( memcmp(pToken, pTerm, MIN(nToken, nTerm))<=0 );
-      if( bNewTerm ){
-        if( nTerm<nToken || memcmp(pToken, pTerm, nToken) ) break;
-      }
-
-      if( p1->base.nData==0 ) continue;
-      if( p1->base.iRowid<=iLastRowid && doclist.n>0 ){
-        for(i=0; p->rc==SQLITE_OK && doclist.n; i++){
-          int i1 = i*nMerge;
-          int iStore;
-          assert( i1+nMerge<=nBuf );
-          for(iStore=i1; iStore<i1+nMerge; iStore++){
-            if( aBuf[iStore].n==0 ){
-              fts5BufferSwap(&doclist, &aBuf[iStore]);
-              fts5BufferZero(&doclist);
-              break;
-            }
-          }
-          if( iStore==i1+nMerge ){
-            xMerge(p, &doclist, nMerge, &aBuf[i1]);
-            for(iStore=i1; iStore<i1+nMerge; iStore++){
-              fts5BufferZero(&aBuf[iStore]);
-            }
-          }
-        }
-        iLastRowid = 0;
-      }
-
-      xAppend(p, (u64)p1->base.iRowid-(u64)iLastRowid, p1, &doclist);
-      iLastRowid = p1->base.iRowid;
-    }
-
-    assert( (nBuf%nMerge)==0 );
-    for(i=0; i<nBuf; i+=nMerge){
+    assert( (s.nBuf%s.nMerge)==0 );
+    for(i=0; i<s.nBuf; i+=s.nMerge){
       int iFree;
       if( p->rc==SQLITE_OK ){
-        xMerge(p, &doclist, nMerge, &aBuf[i]);
+        s.xMerge(p, &s.doclist, s.nMerge, &s.aBuf[i]);
       }
-      for(iFree=i; iFree<i+nMerge; iFree++){
-        fts5BufferFree(&aBuf[iFree]);
+      for(iFree=i; iFree<i+s.nMerge; iFree++){
+        fts5BufferFree(&s.aBuf[iFree]);
       }
     }
-    fts5MultiIterFree(p1);
 
-    pData = fts5IdxMalloc(p, sizeof(*pData)+doclist.n+FTS5_DATA_ZERO_PADDING);
+    pData = fts5IdxMalloc(p, sizeof(*pData)+s.doclist.n+FTS5_DATA_ZERO_PADDING);
+    assert( pData!=0 || p->rc!=SQLITE_OK );
     if( pData ){
       pData->p = (u8*)&pData[1];
-      pData->nn = pData->szLeaf = doclist.n;
-      if( doclist.n ) memcpy(pData->p, doclist.p, doclist.n);
+      pData->nn = pData->szLeaf = s.doclist.n;
+      if( s.doclist.n ) memcpy(pData->p, s.doclist.p, s.doclist.n);
       fts5MultiIterNew2(p, pData, bDesc, ppIter);
     }
-    fts5BufferFree(&doclist);
+
+    assert( (*ppIter)!=0 || p->rc!=SQLITE_OK );
+    if( p->rc==SQLITE_OK && s.pTokendata ){
+      fts5TokendataIterSortMap(p, s2.pT);
+      (*ppIter)->pTokenDataIter = s2.pT;
+      s2.pT = 0;
+    }
   }
 
+  fts5TokendataIterDelete(s2.pT);
+  fts5BufferFree(&s.doclist);
   fts5StructureRelease(pStruct);
-  sqlite3_free(aBuf);
+  sqlite3_free(s.aBuf);
 }
 
 
@@ -248890,38 +249401,6 @@ static void fts5SegIterSetEOF(Fts5SegIter *pSeg){
 }
 
 /*
-** Usually, a tokendata=1 iterator (struct Fts5TokenDataIter) accumulates an
-** array of these for each row it visits. Or, for an iterator used by an
-** "ORDER BY rank" query, it accumulates an array of these for the entire
-** query.
-**
-** Each instance in the array indicates the iterator (and therefore term)
-** associated with position iPos of rowid iRowid. This is used by the
-** xInstToken() API.
-*/
-struct Fts5TokenDataMap {
-  i64 iRowid;                     /* Row this token is located in */
-  i64 iPos;                       /* Position of token */
-  int iIter;                      /* Iterator token was read from */
-};
-
-/*
-** An object used to supplement Fts5Iter for tokendata=1 iterators.
-*/
-struct Fts5TokenDataIter {
-  int nIter;
-  int nIterAlloc;
-
-  int nMap;
-  int nMapAlloc;
-  Fts5TokenDataMap *aMap;
-
-  Fts5PoslistReader *aPoslistReader;
-  int *aPoslistToIter;
-  Fts5Iter *apIter[1];
-};
-
-/*
 ** This function appends iterator pAppend to Fts5TokenDataIter pIn and
 ** returns the result.
 */
@@ -248955,54 +249434,6 @@ static Fts5TokenDataIter *fts5AppendTokendataIter(
   assert( pRet==0 || pRet->nIter<=pRet->nIterAlloc );
 
   return pRet;
-}
-
-/*
-** Delete an Fts5TokenDataIter structure and its contents.
-*/
-static void fts5TokendataIterDelete(Fts5TokenDataIter *pSet){
-  if( pSet ){
-    int ii;
-    for(ii=0; ii<pSet->nIter; ii++){
-      fts5MultiIterFree(pSet->apIter[ii]);
-    }
-    sqlite3_free(pSet->aPoslistReader);
-    sqlite3_free(pSet->aMap);
-    sqlite3_free(pSet);
-  }
-}
-
-/*
-** Append a mapping to the token-map belonging to object pT.
-*/
-static void fts5TokendataIterAppendMap(
-  Fts5Index *p,
-  Fts5TokenDataIter *pT,
-  int iIter,
-  i64 iRowid,
-  i64 iPos
-){
-  if( p->rc==SQLITE_OK ){
-    if( pT->nMap==pT->nMapAlloc ){
-      int nNew = pT->nMapAlloc ? pT->nMapAlloc*2 : 64;
-      int nByte = nNew * sizeof(Fts5TokenDataMap);
-      Fts5TokenDataMap *aNew;
-
-      aNew = (Fts5TokenDataMap*)sqlite3_realloc(pT->aMap, nByte);
-      if( aNew==0 ){
-        p->rc = SQLITE_NOMEM;
-        return;
-      }
-
-      pT->aMap = aNew;
-      pT->nMapAlloc = nNew;
-    }
-
-    pT->aMap[pT->nMap].iRowid = iRowid;
-    pT->aMap[pT->nMap].iPos = iPos;
-    pT->aMap[pT->nMap].iIter = iIter;
-    pT->nMap++;
-  }
 }
 
 /*
@@ -249045,7 +249476,7 @@ static void fts5IterSetOutputsTokendata(Fts5Iter *pIter){
     pIter->base.iRowid = iRowid;
 
     if( nHit==1 && eDetail==FTS5_DETAIL_FULL ){
-      fts5TokendataIterAppendMap(pIter->pIndex, pT, iMin, iRowid, -1);
+      fts5TokendataIterAppendMap(pIter->pIndex, pT, iMin, 0, iRowid, -1);
     }else
     if( nHit>1 && eDetail!=FTS5_DETAIL_NONE ){
       int nReader = 0;
@@ -249298,6 +249729,7 @@ static Fts5Iter *fts5SetupTokendataIter(
     pRet = fts5MultiIterAlloc(p, 0);
   }
   if( pRet ){
+    pRet->nSeg = 0;
     pRet->pTokenDataIter = pSet;
     if( pSet ){
       fts5IterSetOutputsTokendata(pRet);
@@ -249312,7 +249744,6 @@ static Fts5Iter *fts5SetupTokendataIter(
   fts5BufferFree(&bSeek);
   return pRet;
 }
-
 
 /*
 ** Open a new iterator to iterate though all rowid that match the
@@ -249336,8 +249767,14 @@ static int sqlite3Fts5IndexQuery(
     int iIdx = 0;                 /* Index to search */
     int iPrefixIdx = 0;           /* +1 prefix index */
     int bTokendata = pConfig->bTokendata;
+    assert( buf.p!=0 );
     if( nToken>0 ) memcpy(&buf.p[1], pToken, nToken);
 
+    /* The NOTOKENDATA flag is set when each token in a tokendata=1 table
+    ** should be treated individually, instead of merging all those with
+    ** a common prefix into a single entry. This is used, for example, by
+    ** queries performed as part of an integrity-check, or by the fts5vocab
+    ** module.  */
     if( flags & (FTS5INDEX_QUERY_NOTOKENDATA|FTS5INDEX_QUERY_SCAN) ){
       bTokendata = 0;
     }
@@ -249368,7 +249805,7 @@ static int sqlite3Fts5IndexQuery(
     }
 
     if( bTokendata && iIdx==0 ){
-      buf.p[0] = '0';
+      buf.p[0] = FTS5_MAIN_PREFIX;
       pRet = fts5SetupTokendataIter(p, buf.p, nToken+1, pColset);
     }else if( iIdx<=pConfig->nPrefix ){
       /* Straight index lookup */
@@ -249381,7 +249818,7 @@ static int sqlite3Fts5IndexQuery(
         fts5StructureRelease(pStruct);
       }
     }else{
-      /* Scan multiple terms in the main index */
+      /* Scan multiple terms in the main index for a prefix query. */
       int bDesc = (flags & FTS5INDEX_QUERY_DESC)!=0;
       fts5SetupPrefixIter(p, bDesc, iPrefixIdx, buf.p, nToken+1, pColset,&pRet);
       if( pRet==0 ){
@@ -249417,7 +249854,8 @@ static int sqlite3Fts5IndexQuery(
 static int sqlite3Fts5IterNext(Fts5IndexIter *pIndexIter){
   Fts5Iter *pIter = (Fts5Iter*)pIndexIter;
   assert( pIter->pIndex->rc==SQLITE_OK );
-  if( pIter->pTokenDataIter ){
+  if( pIter->nSeg==0 ){
+    assert( pIter->pTokenDataIter );
     fts5TokendataIterNext(pIter, 0, 0);
   }else{
     fts5MultiIterNext(pIter->pIndex, pIter, 0, 0);
@@ -249454,7 +249892,8 @@ static int sqlite3Fts5IterNextScan(Fts5IndexIter *pIndexIter){
 */
 static int sqlite3Fts5IterNextFrom(Fts5IndexIter *pIndexIter, i64 iMatch){
   Fts5Iter *pIter = (Fts5Iter*)pIndexIter;
-  if( pIter->pTokenDataIter ){
+  if( pIter->nSeg==0 ){
+    assert( pIter->pTokenDataIter );
     fts5TokendataIterNext(pIter, 1, iMatch);
   }else{
     fts5MultiIterNextFrom(pIter->pIndex, pIter, iMatch);
@@ -249474,13 +249913,60 @@ static const char *sqlite3Fts5IterTerm(Fts5IndexIter *pIndexIter, int *pn){
 }
 
 /*
+** pIter is a prefix query. This function populates pIter->pTokenDataIter
+** with an Fts5TokenDataIter object containing mappings for all rows
+** matched by the query.
+*/
+static int fts5SetupPrefixIterTokendata(
+  Fts5Iter *pIter,
+  const char *pToken,             /* Token prefix to search for */
+  int nToken                      /* Size of pToken in bytes */
+){
+  Fts5Index *p = pIter->pIndex;
+  Fts5Buffer token = {0, 0, 0};
+  TokendataSetupCtx ctx;
+
+  memset(&ctx, 0, sizeof(ctx));
+
+  fts5BufferGrow(&p->rc, &token, nToken+1);
+  assert( token.p!=0 || p->rc!=SQLITE_OK );
+  ctx.pT = (Fts5TokenDataIter*)sqlite3Fts5MallocZero(&p->rc, sizeof(*ctx.pT));
+
+  if( p->rc==SQLITE_OK ){
+
+    /* Fill in the token prefix to search for */
+    token.p[0] = FTS5_MAIN_PREFIX;
+    memcpy(&token.p[1], pToken, nToken);
+    token.n = nToken+1;
+
+    fts5VisitEntries(
+        p, 0, token.p, token.n, 1, prefixIterSetupTokendataCb, (void*)&ctx
+    );
+
+    fts5TokendataIterSortMap(p, ctx.pT);
+  }
+
+  if( p->rc==SQLITE_OK ){
+    pIter->pTokenDataIter = ctx.pT;
+  }else{
+    fts5TokendataIterDelete(ctx.pT);
+  }
+  fts5BufferFree(&token);
+
+  return fts5IndexReturn(p);
+}
+
+/*
 ** This is used by xInstToken() to access the token at offset iOff, column
 ** iCol of row iRowid. The token is returned via output variables *ppOut
 ** and *pnOut. The iterator passed as the first argument must be a tokendata=1
 ** iterator (pIter->pTokenDataIter!=0).
+**
+** pToken/nToken:
 */
 static int sqlite3Fts5IterToken(
   Fts5IndexIter *pIndexIter,
+  const char *pToken, int nToken,
   i64 iRowid,
   int iCol,
   int iOff,
@@ -249488,12 +249974,21 @@ static int sqlite3Fts5IterToken(
 ){
   Fts5Iter *pIter = (Fts5Iter*)pIndexIter;
   Fts5TokenDataIter *pT = pIter->pTokenDataIter;
-  Fts5TokenDataMap *aMap = pT->aMap;
   i64 iPos = (((i64)iCol)<<32) + iOff;
-
+  Fts5TokenDataMap *aMap = 0;
   int i1 = 0;
-  int i2 = pT->nMap;
+  int i2 = 0;
   int iTest = 0;
+
+  assert( pT || (pToken && pIter->nSeg>0) );
+  if( pT==0 ){
+    int rc = fts5SetupPrefixIterTokendata(pIter, pToken, nToken);
+    if( rc!=SQLITE_OK ) return rc;
+    pT = pIter->pTokenDataIter;
+  }
+
+  i2 = pT->nMap;
+  aMap = pT->aMap;
 
   while( i2>i1 ){
     iTest = (i1 + i2) / 2;
@@ -249517,9 +250012,15 @@ static int sqlite3Fts5IterToken(
   }
 
   if( i2>i1 ){
-    Fts5Iter *pMap = pT->apIter[aMap[iTest].iIter];
-    *ppOut = (const char*)pMap->aSeg[0].term.p+1;
-    *pnOut = pMap->aSeg[0].term.n-1;
+    if( pIter->nSeg==0 ){
+      Fts5Iter *pMap = pT->apIter[aMap[iTest].iIter];
+      *ppOut = (const char*)pMap->aSeg[0].term.p+1;
+      *pnOut = pMap->aSeg[0].term.n-1;
+    }else{
+      Fts5TokenDataMap *p = &aMap[iTest];
+      *ppOut = (const char*)&pT->terms.p[p->iIter];
+      *pnOut = aMap[iTest].nByte;
+    }
   }
 
   return SQLITE_OK;
@@ -249531,7 +250032,9 @@ static int sqlite3Fts5IterToken(
 */
 static void sqlite3Fts5IndexIterClearTokendata(Fts5IndexIter *pIndexIter){
   Fts5Iter *pIter = (Fts5Iter*)pIndexIter;
-  if( pIter && pIter->pTokenDataIter ){
+  if( pIter && pIter->pTokenDataIter
+   && (pIter->nSeg==0 || pIter->pIndex->pConfig->eDetail!=FTS5_DETAIL_FULL)
+  ){
     pIter->pTokenDataIter->nMap = 0;
   }
 }
@@ -249551,17 +250054,29 @@ static int sqlite3Fts5IndexIterWriteTokendata(
   Fts5Iter *pIter = (Fts5Iter*)pIndexIter;
   Fts5TokenDataIter *pT = pIter->pTokenDataIter;
   Fts5Index *p = pIter->pIndex;
-  int ii;
+  i64 iPos = (((i64)iCol)<<32) + iOff;
 
   assert( p->pConfig->eDetail!=FTS5_DETAIL_FULL );
-  assert( pIter->pTokenDataIter );
-
-  for(ii=0; ii<pT->nIter; ii++){
-    Fts5Buffer *pTerm = &pT->apIter[ii]->aSeg[0].term;
-    if( nToken==pTerm->n-1 && memcmp(pToken, pTerm->p+1, nToken)==0 ) break;
-  }
-  if( ii<pT->nIter ){
-    fts5TokendataIterAppendMap(p, pT, ii, iRowid, (((i64)iCol)<<32) + iOff);
+  assert( pIter->pTokenDataIter || pIter->nSeg>0 );
+  if( pIter->nSeg>0 ){
+    /* This is a prefix term iterator. */
+    if( pT==0 ){
+      pT = (Fts5TokenDataIter*)sqlite3Fts5MallocZero(&p->rc, sizeof(*pT));
+      pIter->pTokenDataIter = pT;
+    }
+    if( pT ){
+      fts5TokendataIterAppendMap(p, pT, pT->terms.n, nToken, iRowid, iPos);
+      fts5BufferAppendBlob(&p->rc, &pT->terms, nToken, (const u8*)pToken);
+    }
+  }else{
+    int ii;
+    for(ii=0; ii<pT->nIter; ii++){
+      Fts5Buffer *pTerm = &pT->apIter[ii]->aSeg[0].term;
+      if( nToken==pTerm->n-1 && memcmp(pToken, pTerm->p+1, nToken)==0 ) break;
+    }
+    if( ii<pT->nIter ){
+      fts5TokendataIterAppendMap(p, pT, ii, 0, iRowid, iPos);
+    }
   }
   return fts5IndexReturn(p);
 }
@@ -251466,6 +251981,7 @@ struct Fts5Global {
 #define FTS5_LOCALE_HDR_SIZE ((int)sizeof( ((Fts5Global*)0)->aLocaleHdr ))
 #define FTS5_LOCALE_HDR(pConfig) ((const u8*)(pConfig->pGlobal->aLocaleHdr))
 
+#define FTS5_INSTTOKEN_SUBTYPE 73
 
 /*
 ** Each auxiliary function registered with the FTS5 module is represented
@@ -252005,6 +252521,7 @@ static int fts5BestIndexMethod(sqlite3_vtab *pVTab, sqlite3_index_info *pInfo){
       if( p->usable==0 || iCol<0 ){
         /* As there exists an unusable MATCH constraint this is an
         ** unusable plan. Return SQLITE_CONSTRAINT. */
+        idxStr[iIdxStr] = 0;
         return SQLITE_CONSTRAINT;
       }else{
         if( iCol==nCol+1 ){
@@ -252790,6 +253307,7 @@ static int fts5FilterMethod(
   sqlite3_value *pRowidGe = 0;    /* rowid >= ? expression (or NULL) */
   int iCol;                       /* Column on LHS of MATCH operator */
   char **pzErrmsg = pConfig->pzErrmsg;
+  int bPrefixInsttoken = pConfig->bPrefixInsttoken;
   int i;
   int iIdxStr = 0;
   Fts5Expr *pExpr = 0;
@@ -252825,6 +253343,9 @@ static int fts5FilterMethod(
         rc = fts5ExtractExprText(pConfig, apVal[i], &zText, &bFreeAndReset);
         if( rc!=SQLITE_OK ) goto filter_out;
         if( zText==0 ) zText = "";
+        if( sqlite3_value_subtype(apVal[i])==FTS5_INSTTOKEN_SUBTYPE ){
+          pConfig->bPrefixInsttoken = 1;
+        }
 
         iCol = 0;
         do{
@@ -252965,6 +253486,7 @@ static int fts5FilterMethod(
  filter_out:
   sqlite3Fts5ExprFree(pExpr);
   pConfig->pzErrmsg = pzErrmsg;
+  pConfig->bPrefixInsttoken = bPrefixInsttoken;
   return rc;
 }
 
@@ -253267,7 +253789,6 @@ static int fts5UpdateMethod(
   Fts5Config *pConfig = pTab->p.pConfig;
   int eType0;                     /* value_type() of apVal[0] */
   int rc = SQLITE_OK;             /* Return code */
-  int bUpdateOrDelete = 0;
 
   /* A transaction must be open when this is called. */
   assert( pTab->ts.eState==1 || pTab->ts.eState==2 );
@@ -253279,7 +253800,7 @@ static int fts5UpdateMethod(
   );
   assert( pTab->p.pConfig->pzErrmsg==0 );
   if( pConfig->pgsz==0 ){
-    rc = sqlite3Fts5IndexLoadConfig(pTab->p.pIndex);
+    rc = sqlite3Fts5ConfigLoad(pTab->p.pConfig, pTab->p.pConfig->iCookie);
     if( rc!=SQLITE_OK ) return rc;
   }
 
@@ -253304,7 +253825,6 @@ static int fts5UpdateMethod(
         rc = SQLITE_ERROR;
       }else{
         rc = fts5SpecialDelete(pTab, apVal);
-        bUpdateOrDelete = 1;
       }
     }else{
       rc = fts5SpecialInsert(pTab, z, apVal[2 + pConfig->nCol + 1]);
@@ -253341,7 +253861,6 @@ static int fts5UpdateMethod(
       }else{
         i64 iDel = sqlite3_value_int64(apVal[0]);  /* Rowid to delete */
         rc = sqlite3Fts5StorageDelete(pTab->pStorage, iDel, 0, 0);
-        bUpdateOrDelete = 1;
       }
     }
 
@@ -253369,7 +253888,6 @@ static int fts5UpdateMethod(
         if( eConflict==SQLITE_REPLACE && eType1==SQLITE_INTEGER ){
           i64 iNew = sqlite3_value_int64(apVal[1]);  /* Rowid to delete */
           rc = sqlite3Fts5StorageDelete(pTab->pStorage, iNew, 0, 0);
-          bUpdateOrDelete = 1;
         }
         fts5StorageInsert(&rc, pTab, apVal, pRowid);
       }
@@ -253423,23 +253941,8 @@ static int fts5UpdateMethod(
           rc = sqlite3Fts5StorageDelete(pStorage, iOld, 0, 1);
           fts5StorageInsert(&rc, pTab, apVal, pRowid);
         }
-        bUpdateOrDelete = 1;
         sqlite3Fts5StorageReleaseDeleteRow(pStorage);
       }
-
-    }
-  }
-
-  if( rc==SQLITE_OK
-   && bUpdateOrDelete
-   && pConfig->bSecureDelete
-   && pConfig->iVersion==FTS5_CURRENT_VERSION
-  ){
-    rc = sqlite3Fts5StorageConfigValue(
-        pTab->pStorage, "version", 0, FTS5_CURRENT_VERSION_SECUREDELETE
-    );
-    if( rc==SQLITE_OK ){
-      pConfig->iVersion = FTS5_CURRENT_VERSION_SECUREDELETE;
     }
   }
 
@@ -253492,6 +253995,7 @@ static int fts5RollbackMethod(sqlite3_vtab *pVtab){
   Fts5FullTable *pTab = (Fts5FullTable*)pVtab;
   fts5CheckTransactionState(pTab, FTS5_ROLLBACK, 0);
   rc = sqlite3Fts5StorageRollback(pTab->pStorage);
+  pTab->p.pConfig->pgsz = 0;
   return rc;
 }
 
@@ -254960,7 +255464,7 @@ static void fts5SourceIdFunc(
 ){
   assert( nArg==0 );
   UNUSED_PARAM2(nArg, apUnused);
-  sqlite3_result_text(pCtx, "fts5: 2024-12-07 20:39:59 2aabe05e2e8cae4847a802ee2daddc1d7413d8fc560254d93ee3e72c14685b6c", -1, SQLITE_TRANSIENT);
+  sqlite3_result_text(pCtx, "fts5: 2025-01-14 11:05:00 d2fe6b05f38d9d7cd78c5d252e99ac59f1aea071d669830c1ffe4e8966e84010", -1, SQLITE_TRANSIENT);
 }
 
 /*
@@ -255022,6 +255526,20 @@ static void fts5LocaleFunc(
 
     sqlite3_result_blob(pCtx, pBlob, nBlob, sqlite3_free);
   }
+}
+
+/*
+** Implementation of fts5_insttoken() function.
+*/
+static void fts5InsttokenFunc(
+  sqlite3_context *pCtx,          /* Function call context */
+  int nArg,                       /* Number of args */
+  sqlite3_value **apArg           /* Function arguments */
+){
+  assert( nArg==1 );
+  (void)nArg;
+  sqlite3_result_value(pCtx, apArg[0]);
+  sqlite3_result_subtype(pCtx, FTS5_INSTTOKEN_SUBTYPE);
 }
 
 /*
@@ -255153,8 +255671,15 @@ static int fts5Init(sqlite3 *db){
     if( rc==SQLITE_OK ){
       rc = sqlite3_create_function(
           db, "fts5_locale", 2,
-          SQLITE_UTF8|SQLITE_INNOCUOUS|SQLITE_RESULT_SUBTYPE,
+          SQLITE_UTF8|SQLITE_INNOCUOUS|SQLITE_RESULT_SUBTYPE|SQLITE_SUBTYPE,
           p, fts5LocaleFunc, 0, 0
+      );
+    }
+    if( rc==SQLITE_OK ){
+      rc = sqlite3_create_function(
+          db, "fts5_insttoken", 1,
+          SQLITE_UTF8|SQLITE_INNOCUOUS|SQLITE_RESULT_SUBTYPE,
+          p, fts5InsttokenFunc, 0, 0
       );
     }
   }
@@ -255419,6 +255944,11 @@ static int fts5StorageGetStmt(
       sqlite3_free(zSql);
       if( rc!=SQLITE_OK && pzErrMsg ){
         *pzErrMsg = sqlite3_mprintf("%s", sqlite3_errmsg(pC->db));
+      }
+      if( rc==SQLITE_ERROR && eStmt>FTS5_STMT_LOOKUP2 && eStmt<FTS5_STMT_SCAN ){
+        /* One of the internal tables - not the %_content table - is missing.
+        ** This counts as a corrupted table.  */
+       rc = SQLITE_CORRUPT;
       }
     }
   }
@@ -258081,8 +258611,8 @@ static int fts5TriTokenize(
   char *zOut = aBuf;
   int ii;
   const unsigned char *zIn = (const unsigned char*)pText;
-  const unsigned char *zEof = &zIn[nText];
-  u32 iCode;
+  const unsigned char *zEof = (zIn ? &zIn[nText] : 0);
+  u32 iCode = 0;
   int aStart[3];                  /* Input offset of each character in aBuf[] */
 
   UNUSED_PARAM(unusedFlags);
@@ -258091,8 +258621,8 @@ static int fts5TriTokenize(
   for(ii=0; ii<3; ii++){
     do {
       aStart[ii] = zIn - (const unsigned char*)pText;
+      if( zIn>=zEof ) return SQLITE_OK;
       READ_UTF8(zIn, zEof, iCode);
-      if( iCode==0 ) return SQLITE_OK;
       if( p->bFold ) iCode = sqlite3Fts5UnicodeFold(iCode, p->iFoldParam);
     }while( iCode==0 );
     WRITE_UTF8(zOut, iCode);
@@ -258113,8 +258643,11 @@ static int fts5TriTokenize(
     /* Read characters from the input up until the first non-diacritic */
     do {
       iNext = zIn - (const unsigned char*)pText;
+      if( zIn>=zEof ){
+        iCode = 0;
+        break;
+      }
       READ_UTF8(zIn, zEof, iCode);
-      if( iCode==0 ) break;
       if( p->bFold ) iCode = sqlite3Fts5UnicodeFold(iCode, p->iFoldParam);
     }while( iCode==0 );
 
@@ -260507,4 +261040,5 @@ SQLITE_API int sqlite3_stmt_init(
 /************** End of stmt.c ************************************************/
 /* Return the source-id for this library */
 SQLITE_API const char *sqlite3_sourceid(void){ return SQLITE_SOURCE_ID; }
+#endif /* SQLITE_AMALGAMATION */
 /************************** End of sqlite3.c ******************************/
